@@ -14,7 +14,7 @@ export interface UseStellarWalletReturn {
     isConnecting: boolean;
     method: SigningMethod | null;
     networkPassphrase: string | null;
-    signTx: (xdr: string, network: "testnet" | "mainnet") => Promise<string>;
+    signTx: (xdr: string, network: "testnet" | "mainnet" | "futurenet") => Promise<string>;
     connect: () => Promise<void>;
     disconnect: () => void;
     // SEP-7 specific state for the UI to consume
@@ -81,7 +81,7 @@ export function useStellarWallet(): UseStellarWalletReturn {
     }, [freighter, ledger]);
 
     const signTx = useCallback(
-        async (xdr: string, network: "testnet" | "mainnet"): Promise<string> => {
+        async (xdr: string, network: "testnet" | "mainnet" | "futurenet"): Promise<string> => {
             // Ledger signing
             if (method === "ledger" && ledger.isConnected) {
                 return await ledger.signTransaction(xdr);
@@ -92,7 +92,9 @@ export function useStellarWallet(): UseStellarWalletReturn {
                 const networkPassphrase =
                     network === "testnet"
                         ? "Test SDF Network ; September 2015"
-                        : "Public Global Stellar Network ; September 2015";
+                        : network === "futurenet"
+                          ? "Test SDF Future Network ; September 2015"
+                          : "Public Global Stellar Network ; September 2015";
 
                 const uri = generateSep7TxUri({
                     xdr,

@@ -28,7 +28,7 @@ export interface UseFreighterReturn {
     /** Sign a transaction XDR via Freighter */
     signTx: (
         xdr: string,
-        network: "testnet" | "mainnet",
+        network: "testnet" | "mainnet" | "futurenet",
     ) => Promise<string>;
 }
 
@@ -114,7 +114,7 @@ export function useFreighter(): UseFreighterReturn {
     }, []);
 
     const signTx = useCallback(
-        async (xdr: string, network: "testnet" | "mainnet"): Promise<string> => {
+        async (xdr: string, network: "testnet" | "mainnet" | "futurenet"): Promise<string> => {
             if (!publicKey) {
                 throw new Error("Wallet not connected");
             }
@@ -122,7 +122,9 @@ export function useFreighter(): UseFreighterReturn {
             const networkPassphrase =
                 network === "testnet"
                     ? "Test SDF Network ; September 2015"
-                    : "Public Global Stellar Network ; September 2015";
+                    : network === "futurenet"
+                      ? "Test SDF Future Network ; September 2015"
+                      : "Public Global Stellar Network ; September 2015";
 
             const result = await signTransaction(xdr, {
                 networkPassphrase,

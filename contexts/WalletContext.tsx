@@ -116,7 +116,7 @@ export function WalletProvider({ children, expectedNetwork = "testnet" }: Wallet
 
   const handleSignTx = useCallback(
     async (xdr: string, network: SorobanNetwork): Promise<string> => {
-      return wallet.signTx(xdr, network === "mainnet" ? "mainnet" : "testnet");
+      return wallet.signTx(xdr, network);
     },
     [wallet]
   );

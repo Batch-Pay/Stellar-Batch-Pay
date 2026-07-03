@@ -40,6 +40,11 @@ jobs:
         env:
           CI: 'true'
 
+      - name: Run ESLint
+        run: bun run lint
+        env:
+          CI: 'true'
+
       - name: Run Vitest suite
         run: bun run test
         env:

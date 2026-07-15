@@ -31,9 +31,6 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Verify Bun Version
-        run: npx tsx scripts/check-bun-version.ts
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:

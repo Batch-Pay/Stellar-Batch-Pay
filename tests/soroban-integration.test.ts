@@ -236,14 +236,14 @@ describe('CLI smoke', () => {
   const cli = path.join(process.cwd(), 'cli', 'index.ts');
 
   test('--help exits 0 and mentions the three commands', () => {
-    const out = execFileSync('bun', [cli, '--help'], { encoding: 'utf-8' });
+    const out = execFileSync('npx', ['tsx', cli, '--help'], { encoding: 'utf-8' });
     expect(out).toMatch(/validate/);
     expect(out).toMatch(/build/);
     expect(out).toMatch(/submit/);
   });
 
   test('--version prints the package name and version', () => {
-    const out = execFileSync('bun', [cli, '--version'], { encoding: 'utf-8' });
+    const out = execFileSync('npx', ['tsx', cli, '--version'], { encoding: 'utf-8' });
     expect(out).toMatch(/stellar-batch-pay/);
   });
 
@@ -264,13 +264,13 @@ describe('CLI smoke', () => {
     fs.writeFileSync(tmpPath, payload);
 
     try {
-      const out = execFileSync('bun', [cli, 'validate', tmpPath], {
+      const out = execFileSync('npx', ['tsx', cli, 'validate', '--input', tmpPath], {
         encoding: 'utf-8',
       });
       const parsed = JSON.parse(out);
       expect(parsed.command).toBe('validate');
-      expect(parsed.validRowCount).toBe(2);
-      expect(parsed.errors).toEqual([]);
+      expect(parsed.total).toBe(2);
+      expect(parsed.errors).toEqual({});
     } finally {
       try {
         fs.unlinkSync(tmpPath);

@@ -68,7 +68,7 @@ describe("vesting event parsers from contract snapshots", () => {
     expect(parsed.amount).toBe("100");
     expect(parsed.endTime).toBe(1000);
     expect(parsed.token).toBe(
-      "CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG",
+      "CDS3FDGQ4JA2V3F26Y4BMWWJEC5TT26RJBN7KIQKUMVO2MAOCMDTSZ7A",
     );
     expect(parsed.memo).toBe("");
   });
@@ -82,7 +82,7 @@ describe("vesting event parsers from contract snapshots", () => {
     expect(parsed.revokedAmount).toBe("100");
     expect(parsed.pendingVested).toBe("0");
     expect(parsed.token).toBe(
-      "CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG",
+      "CDS3FDGQ4JA2V3F26Y4BMWWJEC5TT26RJBN7KIQKUMVO2MAOCMDTSZ7A",
     );
   });
 
@@ -104,7 +104,7 @@ describe("vesting event parsers from contract snapshots", () => {
     });
     const topics = entry!.event.body.v0.topics;
     expect(parseVestingEventRecipient("VestingDeposited", topics)).toBe(
-      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
     );
   });
 });

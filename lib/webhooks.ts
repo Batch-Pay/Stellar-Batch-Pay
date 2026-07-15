@@ -189,7 +189,8 @@ async function validateResolvedWebhookTarget(rawUrl: string): Promise<string | n
 
 function getWebhookDeliveryError(err: unknown): string {
   const message = err instanceof Error ? err.message : "Unknown error";
-  if (message.toLowerCase().includes("redirect")) {
+  const causeMsg = (err as any)?.cause?.message || "";
+  if (message.toLowerCase().includes("redirect") || causeMsg.toLowerCase().includes("redirect")) {
     return REDIRECT_BLOCKED_ERROR;
   }
   return message;

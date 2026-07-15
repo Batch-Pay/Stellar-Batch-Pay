@@ -42,7 +42,7 @@ describe("fetch-history", () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/batch-history?page=1&limit=5&publicKey=GABC123&network=testnet",
+      "/api/batch-history?page=1&limit=5&publicKey=GABC123&network=testnet&includeSummary=true",
     );
     expect(result).toEqual(mockResponse);
   });

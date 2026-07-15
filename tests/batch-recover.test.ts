@@ -45,7 +45,7 @@ describe("GET /api/batch-recover", () => {
   });
 
   test("returns 200 with recovery data for a completed SQLite job", async () => {
-    const res = await GET(makeRequest({ jobId }) as never);
+    const res = await GET(makeRequest({ jobId, publicKey: PUBLIC_KEY }) as never);
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -60,7 +60,7 @@ describe("GET /api/batch-recover", () => {
   });
 
   test("returns 404 for an unknown jobId", async () => {
-    const res = await GET(makeRequest({ jobId: "does-not-exist" }) as never);
+    const res = await GET(makeRequest({ jobId: "does-not-exist", publicKey: PUBLIC_KEY }) as never);
     const body = await res.json();
 
     expect(res.status).toBe(404);

@@ -8,6 +8,18 @@ import {
 
 const STORAGE_KEY = "batchpay_settings_v1";
 
+// Mock localStorage and window for Node environment
+const mockStorage = new Map<string, string>();
+global.window = {} as any;
+global.localStorage = {
+  getItem: (key: string) => mockStorage.get(key) || null,
+  setItem: (key: string, value: string) => mockStorage.set(key, value),
+  removeItem: (key: string) => mockStorage.delete(key),
+  clear: () => mockStorage.clear(),
+  length: 0,
+  key: () => null,
+};
+
 describe("settings-prefs", () => {
   beforeEach(() => {
     // Clear localStorage before each test

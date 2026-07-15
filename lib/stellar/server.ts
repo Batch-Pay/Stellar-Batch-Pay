@@ -269,38 +269,29 @@ export class StellarService {
       let totalAmountBig = new Big(0);
 
       for (const batch of batches) {
-const outcome = await this.submitOneTransaction(
-  batch.payments,
-  sourceAccount,
-  fee,
-  txCount,
-);
+        let retries = 0;
+        let outcome;
 
-results.push(...outcome.results);
-totalAmountBig = totalAmountBig.plus(outcome.totalAmount);
+        while (true) {
+          outcome = await this.submitOneTransaction(
+            batch.payments,
+            sourceAccount,
+            fee,
+            txCount,
+          );
 
-if (outcome.submitted) {
-  txCount++;
-}
-
-// Reload the source account after a bad-sequence error so the next
-// batch builds against a fresh sequence number.
-if (outcome.needsReload) {
-  sourceAccount = await this.server.loadAccount(
-    this.keypair.publicKey(),
-  );
-}
+          if (outcome.needsReload && retries < BAD_SEQUENCE_RETRY_LIMIT) {
+            retries++;
+            sourceAccount = await this.server.loadAccount(this.keypair.publicKey());
+            continue;
+          }
+          break;
+        }
 
         results.push(...outcome.results);
         totalAmountBig = totalAmountBig.plus(outcome.totalAmount);
         if (outcome.submitted) {
           txCount++;
-        }
-
-        // Reload the source account after a bad-sequence error so the next
-        // batch builds against a fresh sequence number.
-        if (outcome.needsReload) {
-          sourceAccount = await this.server.loadAccount(this.keypair.publicKey());
         }
       }
 

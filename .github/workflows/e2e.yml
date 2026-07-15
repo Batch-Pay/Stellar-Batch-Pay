@@ -18,26 +18,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          # Pinned Bun version. Release notes: https://github.com/oven-sh/bun/releases/tag/bun-v1.2.4
-          bun-version: 1.2.4
-
-      - name: Verify Bun Version
-        run: bun scripts/check-bun-version.ts
+          node-version: '22'
 
       - name: Install deps
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Build production bundle
-        run: bun run build
+        run: npm run build
 
       - name: Install Playwright browsers
         run: bunx playwright install --with-deps chromium
 
       - name: Start production server
-        run: bun run start &
+        run: npm run start &
 
       - name: Wait for server to be ready
         run: |

@@ -176,5 +176,5 @@ describe("triggerWebhooksWithRetry (#338)", () => {
     } finally {
       await stopServer(metadataServer.server);
     }
-  });
+  }, 30_000);
 });

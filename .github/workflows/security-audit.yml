@@ -26,14 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          # Pinned Bun version. Release notes: https://github.com/oven-sh/bun/releases/tag/bun-v1.2.4
-          bun-version: 1.2.4
+          node-version: '22'
 
       - name: Verify Bun Version
-        run: bun scripts/check-bun-version.ts
+        run: npx tsx scripts/check-bun-version.ts
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -41,7 +40,7 @@ jobs:
           node-version: "22"
 
       - name: Install deps
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Run npm audit (fail on high/critical)
         id: audit

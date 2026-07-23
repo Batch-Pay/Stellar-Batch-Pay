@@ -15,9 +15,40 @@ export function generateReceiptHtml(batchResult: BatchResult): string {
   const successfulPayments = batchResult.results.filter(r => r.status === "success");
   const failedPayments = batchResult.results.filter(r => r.status === "failed");
 
-  const totalAmount = formatStellarAmount(
-    sumStellarAmounts(batchResult.results.map(r => r.amount || "0"))
-  );
+  const assetGroups: Record<string, string[]> = {};
+  for (const payment of successfulPayments) {
+    const asset = payment.asset || "XLM";
+    if (!assetGroups[asset]) {
+      assetGroups[asset] = [];
+    }
+    assetGroups[asset].push(payment.amount || "0");
+  }
+
+  const successfulTotals = Object.entries(assetGroups).map(([asset, amounts]) => ({
+    asset,
+    total: formatStellarAmount(sumStellarAmounts(amounts)),
+  }));
+
+  let totalAmountHtml = "";
+  let totalAmountLabel = "";
+
+  if (successfulTotals.length === 0) {
+    totalAmountHtml = `<div class="number">0.0000000</div>`;
+    totalAmountLabel = `<div class="label">Total Amount (XLM)</div>`;
+  } else if (successfulTotals.length === 1) {
+    const { asset, total } = successfulTotals[0];
+    if (asset.includes(':')) {
+      totalAmountHtml = `<div class="number" style="font-size: 14px; line-height: 1.3; padding-top: 5px;">${total} ${asset}</div>`;
+      totalAmountLabel = `<div class="label">Total Amount</div>`;
+    } else {
+      totalAmountHtml = `<div class="number">${total}</div>`;
+      totalAmountLabel = `<div class="label">Total Amount (${asset})</div>`;
+    }
+  } else {
+    totalAmountHtml = `<div class="number" style="font-size: 14px; line-height: 1.3; padding-top: 5px;">${successfulTotals.map(t => `${t.total} ${t.asset}`).join('<br/>')}</div>`;
+    totalAmountLabel = `<div class="label">Total Amount</div>`;
+  }
+
 
   return `
 <!DOCTYPE html>
@@ -74,8 +105,8 @@ export function generateReceiptHtml(batchResult: BatchResult): string {
           <div class="label">Failed</div>
         </div>
         <div class="summary-box">
-          <div class="number">${totalAmount}</div>
-          <div class="label">Total Amount (XLM)</div>
+          ${totalAmountHtml}
+          ${totalAmountLabel}
         </div>
       </div>
     </div>
@@ -166,9 +197,24 @@ export function generateReceiptHtml(batchResult: BatchResult): string {
 
 export function generateReceiptText(batchResult: BatchResult): string {
   const successfulPayments = batchResult.results.filter(r => r.status === "success");
-  const totalAmount = formatStellarAmount(
-    sumStellarAmounts(batchResult.results.map(r => r.amount || "0"))
-  );
+
+  const assetGroups: Record<string, string[]> = {};
+  for (const payment of successfulPayments) {
+    const asset = payment.asset || "XLM";
+    if (!assetGroups[asset]) {
+      assetGroups[asset] = [];
+    }
+    assetGroups[asset].push(payment.amount || "0");
+  }
+
+  const successfulTotals = Object.entries(assetGroups).map(([asset, amounts]) => ({
+    asset,
+    total: formatStellarAmount(sumStellarAmounts(amounts)),
+  }));
+
+  const totalAmountText = successfulTotals.length > 0
+    ? successfulTotals.map(t => `${t.total} ${t.asset}`).join(", ")
+    : "0.0000000 XLM";
 
   let text = `Stellar BatchPay - Batch Payment Receipt\n`;
   text += `${"=".repeat(50)}\n\n`;
@@ -181,7 +227,7 @@ export function generateReceiptText(batchResult: BatchResult): string {
   text += `Total Recipients: ${batchResult.totalRecipients}\n`;
   text += `Successful: ${batchResult.summary.successful}\n`;
   text += `Failed: ${batchResult.summary.failed}\n`;
-  text += `Total Amount: ${totalAmount} XLM\n\n`;
+  text += `Total Amount: ${totalAmountText}\n\n`;
 
   text += `PAYMENT DETAILS\n`;
   text += `${"-".repeat(30)}\n`;

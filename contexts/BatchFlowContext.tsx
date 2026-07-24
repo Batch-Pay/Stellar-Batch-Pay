@@ -381,7 +381,6 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
       setStep(2);
     } catch (error) {
       console.error("Failed to parse file:", error);
-      setValidationResult(null);
       setSummary(null);
       setValidationError(
         error instanceof Error ? error.message : "Failed to parse payment file",
@@ -402,8 +401,20 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
     setValidationResult(parsed);
     setValidationError("");
 
-    const batchSummary = getBatchSummary(manualPayments);
-    setSummary(batchSummary);
+    try {
+      const batchSummary = getBatchSummary(manualPayments);
+      setSummary(batchSummary);
+    } catch (error) {
+      console.error("Failed to summarize manual batch:", error);
+      setSummary(null);
+      setValidationError(
+        error instanceof Error ? error.message : "Failed to summarize payment batch",
+      );
+      toast.error(
+        error instanceof Error ? error.message : "Failed to summarize payment batch",
+      );
+      return;
+    }
 
     toast.success("Manual batch validated successfully");
     setStep(2);

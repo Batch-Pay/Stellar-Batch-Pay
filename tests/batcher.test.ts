@@ -9,6 +9,7 @@ import {
   estimateBatchTransactionSize,
   getBatchSummary,
 } from '../lib/stellar/batcher';
+import { analyzeParsedPayments, parsePaymentFile } from '../lib/stellar/parser';
 import { parseAsset } from '../lib/stellar/utils';
 
 const firstAddress = Keypair.random().publicKey();
@@ -255,5 +256,51 @@ describe('Batch Summary', () => {
     ];
     const summary = getBatchSummary(payments);
     expect(summary.totalAmount).toBe('30.75');
+  });
+
+  test('preserves valid summary data when an amount is malformed', () => {
+    const payments = [
+      {
+        address: firstAddress,
+        amount: '10',
+        asset: 'XLM',
+      },
+      {
+        address: secondAddress,
+        amount: 'not-a-number',
+        asset: 'XLM',
+      },
+    ];
+
+    const summary = getBatchSummary(payments);
+
+    expect(summary.recipientCount).toBe(2);
+    expect(summary.validCount).toBe(1);
+    expect(summary.invalidCount).toBe(1);
+    expect(summary.totalAmount).toBe('10');
+    expect(summary.assetBreakdown['XLM']).toBe(1);
+  });
+
+  test('preserves upload row validation for malformed amounts', () => {
+    const csv = `address,amount,asset
+${firstAddress},10,XLM
+${secondAddress},not-a-number,XLM`;
+    const parsed = parsePaymentFile(csv, 'csv');
+    const summary = getBatchSummary(parsed.rows.map((row) => row.instruction));
+
+    expect(parsed.rows[1].valid).toBe(false);
+    expect(parsed.rows[1].error).toContain('positive number');
+    expect(summary.totalAmount).toBe('10');
+  });
+
+  test('summarizes manual entries without throwing on malformed amounts', () => {
+    const parsed = analyzeParsedPayments([
+      { address: firstAddress, amount: '10', asset: 'XLM' },
+      { address: secondAddress, amount: 'not-a-number', asset: 'XLM' },
+    ]);
+
+    expect(() => getBatchSummary(parsed.rows.map((row) => row.instruction))).not.toThrow();
+    expect(parsed.rows[1].valid).toBe(false);
+    expect(parsed.rows[1].error).toContain('positive number');
   });
 });

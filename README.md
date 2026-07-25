@@ -17,6 +17,12 @@ Think of it like this: if you need to process payouts for hundreds of recipients
 - **Stellar-aware batching** that respects network operation limits.
 - **Detailed result visibility** for processed transactions and recipient-level outcomes.
 
+## Community
+
+Join the Stellar BatchPay community on Telegram to ask questions, discuss ideas, report issues, and connect with contributors.
+
+[Join the Telegram Group](https://t.me/+TLkxWuvduWM4MTRk)
+
 ---
 
 ## The Problem It Solves
@@ -457,11 +463,12 @@ def verify_webhook(payload, signature, secret):
 
 ## Need Help?
 
-1. **Check the examples** in the `examples/` folder
-2. **Read error messages carefully** — they tell you exactly what went wrong
-3. **Test with testnet first** — always
-4. **Review the file format** — make sure addresses are correct
-5. **Check Stellar documentation** at https://developers.stellar.org/
+1. **Join our [Telegram community](https://t.me/+TLkxWuvduWM4MTRk)** for questions and discussions
+2. **Check the examples** in the `examples/` folder
+3. **Read error messages carefully** — they tell you exactly what went wrong
+4. **Test with testnet first** — always
+5. **Review the file format** — make sure addresses are correct
+6. **Check the [Stellar documentation](https://developers.stellar.org/)**
 
 ---
 

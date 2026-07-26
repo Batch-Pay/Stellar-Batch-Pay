@@ -80,6 +80,34 @@ export async function fetchBatchHistory(
 }
 
 /**
+ * Fetch the full, owner-scoped result for a single job — including the
+ * per-payment results array (recipients, amounts, statuses, tx hashes).
+ *
+ * The list returned by fetchBatchHistory/getBatchHistory only carries a
+ * summary (see `results: []` above), so receipt/CSV downloads must call
+ * this before generating a file for a specific historical batch.
+ */
+export async function fetchFullBatchResult(
+  jobId: string,
+  publicKey: string
+): Promise<BatchResult | null> {
+  const params = new URLSearchParams({ publicKey });
+  const response = await fetch(`/api/batch-status/${encodeURIComponent(jobId)}?${params.toString()}`);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch batch details: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+
+  if (data.status !== "completed" || !data.result) {
+    return null;
+  }
+
+  return data.result as BatchResult;
+}
+
+/**
  * Get cached batch history from localStorage.
  * Returns null if cache is invalid, expired, or version mismatch.
  */

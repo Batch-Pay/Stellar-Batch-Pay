@@ -45,7 +45,7 @@ function getDb(): Database.Database {
       tier TEXT NOT NULL,
       endpoint TEXT NOT NULL,
       remaining INTEGER NOT NULL,
-      limit INTEGER NOT NULL,
+      "limit" INTEGER NOT NULL,
       resetAt INTEGER NOT NULL,
       windowMs INTEGER NOT NULL,
       updatedAt TEXT NOT NULL
@@ -106,7 +106,7 @@ const endpointLimits: Record<EndpointKey, EndpointLimit> = {
   "health": tunedLimit("health", DEFAULT_LIMITS["health"]),
 };
 
-const apiKeyTierMap: Record<string, Tier> = (() => {
+export const apiKeyTierMap: Record<string, Tier> = (() => {
   const raw = process.env.RATE_LIMIT_API_KEY_TIERS;
   if (!raw) return {};
 
@@ -133,7 +133,7 @@ function hashIdentifier(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-function resolveTier(request: NextRequest): Tier {
+function getValidatedApiKey(request: NextRequest): { key: string; tier: Tier } | null {
   const auth = request.headers.get("authorization");
   let keyValue: string | undefined;
 
@@ -148,23 +148,30 @@ function resolveTier(request: NextRequest): Tier {
 
   if (keyValue) {
     if (apiKeyTierMap[keyValue]) {
-      return apiKeyTierMap[keyValue];
+      return { key: keyValue, tier: apiKeyTierMap[keyValue] };
     }
 
     const hashed = hashIdentifier(keyValue);
     if (apiKeyTierMap[hashed]) {
-      return apiKeyTierMap[hashed];
+      return { key: keyValue, tier: apiKeyTierMap[hashed] };
     }
   }
 
+  return null;
+}
+
+function resolveTier(request: NextRequest): Tier {
+  const validated = getValidatedApiKey(request);
+  if (validated) {
+    return validated.tier;
+  }
   return "free";
 }
 
 function resolveIdentifier(request: NextRequest): string {
-  const auth = request.headers.get("authorization");
-  if (auth?.startsWith("Bearer ")) {
-    const token = auth.slice(7).trim();
-    return `auth:${hashIdentifier(token)}`;
+  const validated = getValidatedApiKey(request);
+  if (validated) {
+    return `auth:${hashIdentifier(validated.key)}`;
   }
 
   const forwarded = request.headers.get("x-forwarded-for");
@@ -204,7 +211,7 @@ export function applyRateLimit(request: NextRequest, endpoint: EndpointKey): {
       const remaining = limit - 1;
       db.prepare(`
         INSERT OR REPLACE INTO rate_buckets
-        (key, tier, endpoint, remaining, limit, resetAt, windowMs, updatedAt)
+        (key, tier, endpoint, remaining, "limit", resetAt, windowMs, updatedAt)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(key, tier, endpoint, remaining, limit, resetAtMs, policy.windowMs, new Date().toISOString());
       return { newWindow: true, resetAtMs, remaining };

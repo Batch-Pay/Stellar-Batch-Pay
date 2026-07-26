@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CalendarRange, Download, FileText, Wallet, Receipt } from "lucide-react";
+import { CalendarRange, Download, FileText, Loader2, Wallet, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useWallet } from "@/contexts/WalletContext";
 import { useBatchHistory } from "@/hooks/use-batch-history";
+import { fetchFullBatchResult } from "@/lib/batch-history-adapter";
 import {
   filterClaimExportRowsByDateRange,
   toClaimExportCsv,
@@ -85,6 +86,7 @@ export function HistoryExportCenter() {
   const { history, loading } = useBatchHistory(publicKey);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const scopedRows = useMemo(() => toClaimExportRows(history, publicKey), [history, publicKey]);
   const filteredRows = useMemo(
@@ -128,21 +130,47 @@ export function HistoryExportCenter() {
     toast.success("Print dialog opened for PDF export.");
   };
 
-  const handleDownloadBatchReceipt = (batch: BatchResult) => {
+  const resolveFullBatchResult = async (batch: BatchResult): Promise<BatchResult | null> => {
+    if (!publicKey) {
+      toast.error("Connect a wallet to download batch receipts.");
+      return null;
+    }
+
+    // History rows are summary-only (no per-payment results), so fetch the
+    // full, owner-scoped job detail before generating a receipt/CSV.
+    const full = await fetchFullBatchResult(batch.batchId, publicKey);
+    if (!full) {
+      toast.error("Could not load payment details for this batch.");
+      return null;
+    }
+    return full;
+  };
+
+  const handleDownloadBatchReceipt = async (batch: BatchResult) => {
+    setDownloadingId(batch.batchId);
     try {
-      downloadReceipt(batch);
+      const full = await resolveFullBatchResult(batch);
+      if (!full) return;
+      downloadReceipt(full);
       toast.success("Receipt downloaded successfully.");
     } catch (error) {
       toast.error("Failed to generate receipt.");
+    } finally {
+      setDownloadingId(null);
     }
   };
 
-  const handleDownloadBatchCsv = (batch: BatchResult) => {
+  const handleDownloadBatchCsv = async (batch: BatchResult) => {
+    setDownloadingId(batch.batchId);
     try {
-      downloadReceiptCsv(batch);
+      const full = await resolveFullBatchResult(batch);
+      if (!full) return;
+      downloadReceiptCsv(full);
       toast.success("CSV downloaded successfully.");
     } catch (error) {
       toast.error("Failed to generate CSV.");
+    } finally {
+      setDownloadingId(null);
     }
   };
 
@@ -257,18 +285,28 @@ export function HistoryExportCenter() {
                       variant="ghost"
                       size="sm"
                       onClick={() => handleDownloadBatchReceipt(batch)}
+                      disabled={downloadingId === batch.batchId}
                       className="text-[#00D98B] hover:text-[#00D98B]/80 h-8 px-2"
                     >
-                      <FileText className="h-3.5 w-3.5 mr-1" />
+                      {downloadingId === batch.batchId ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <FileText className="h-3.5 w-3.5 mr-1" />
+                      )}
                       Receipt
                     </Button>
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => handleDownloadBatchCsv(batch)}
+                      disabled={downloadingId === batch.batchId}
                       className="text-gray-400 hover:text-white h-8 px-2"
                     >
-                      <Download className="h-3.5 w-3.5 mr-1" />
+                      {downloadingId === batch.batchId ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <Download className="h-3.5 w-3.5 mr-1" />
+                      )}
                       CSV
                     </Button>
                   </div>

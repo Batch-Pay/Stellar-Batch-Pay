@@ -43,6 +43,7 @@ vi.mock('stellar-sdk', async (importOriginal) => {
       return {
         operations: this.operations,
         sign: vi.fn(),
+        hash: () => Buffer.from('mock-transaction-hash'),
         toEnvelope: () => envelope,
       };
     }

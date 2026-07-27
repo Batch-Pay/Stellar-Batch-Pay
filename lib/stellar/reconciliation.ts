@@ -57,7 +57,7 @@ export async function reconcileTransaction(
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      await server.getTransaction(txHash);
+      await server.transactions().transaction(txHash).call();
       return { status: "success", attempts: attempt };
     } catch (error: unknown) {
       const status = getStatusCode(error);

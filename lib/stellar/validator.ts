@@ -151,6 +151,13 @@ export function validatePaymentInstruction(instruction: PaymentInstruction): {
     return { valid: false, error: `Invalid asset code length: ${code}` };
   }
 
+  if (!/^[A-Za-z0-9]+$/.test(code)) {
+    return {
+      valid: false,
+      error: `Invalid asset code "${code}": must contain only alphanumeric characters (A-Z, a-z, 0-9)`,
+    };
+  }
+
   return { valid: true };
 }
 

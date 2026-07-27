@@ -99,6 +99,84 @@ describe('Payment Instruction Validation', () => {
   });
 });
 
+describe('Asset Code Alphanumeric Validation', () => {
+  test('rejects asset code with a space ("BAD CODE")', () => {
+    const result = validatePaymentInstruction({
+      address: validAddress,
+      amount: '10',
+      asset: `BAD CODE:${validIssuer}`,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/alphanumeric/i);
+  });
+
+  test('rejects asset code with a hyphen ("BAD-CODE")', () => {
+    const result = validatePaymentInstruction({
+      address: validAddress,
+      amount: '10',
+      asset: `BAD-CODE:${validIssuer}`,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/alphanumeric/i);
+  });
+
+  test('rejects asset code with an underscore ("BAD_CODE")', () => {
+    const result = validatePaymentInstruction({
+      address: validAddress,
+      amount: '10',
+      asset: `BAD_CODE:${validIssuer}`,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/alphanumeric/i);
+  });
+
+  test('rejects asset code with a special character ("USD$")', () => {
+    const result = validatePaymentInstruction({
+      address: validAddress,
+      amount: '10',
+      asset: `USD$:${validIssuer}`,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/alphanumeric/i);
+  });
+
+  test('accepts a 1-character alphanumeric code ("X")', () => {
+    const result = validatePaymentInstruction({
+      address: validAddress,
+      amount: '10',
+      asset: `X:${validIssuer}`,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  test('accepts a mixed-case alphanumeric code ("UsDc")', () => {
+    const result = validatePaymentInstruction({
+      address: validAddress,
+      amount: '10',
+      asset: `UsDc:${validIssuer}`,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  test('accepts a 12-character alphanumeric code at max length', () => {
+    const result = validatePaymentInstruction({
+      address: validAddress,
+      amount: '10',
+      asset: `ABCDEFGH1234:${validIssuer}`,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  test('accepts a numeric-only code ("1234")', () => {
+    const result = validatePaymentInstruction({
+      address: validAddress,
+      amount: '10',
+      asset: `1234:${validIssuer}`,
+    });
+    expect(result.valid).toBe(true);
+  });
+});
+
 describe('Memo Validation', () => {
   test('validates valid text memo', () => {
     const result = validateMemo('Hello World', 'text');

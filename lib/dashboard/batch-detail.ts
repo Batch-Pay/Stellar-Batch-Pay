@@ -8,7 +8,7 @@ export interface BatchDetailRecipient {
   address: string;
   amount: string;
   asset: string;
-  status: "pending" | "success" | "failed";
+  status: "pending" | "success" | "failed" | "unknown";
   transactionHash?: string;
   error?: string;
 }

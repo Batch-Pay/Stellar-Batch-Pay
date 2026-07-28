@@ -300,14 +300,32 @@ describe("POST /api/batch-retry (#388)", () => {
         expect(retryJob?.payments[0].address).toBe(RECIPIENT_BAD);
     });
 
-    test("still blocks retry for pre-signed batches without payment metadata (#515)", async () => {
-        // Create a pre-signed job with empty payments (no metadata preserved)
-        const emptyPaymentsJobId = createJob([], "testnet", OWNER, ["AAAA"]);
-        updateJob(emptyPaymentsJobId, { status: "completed", result: completedResult });
+    test("blocks retry when failed row is pending Horizon reconciliation (#697)", async () => {
+        const unreconciledResult: BatchResult = {
+            batchId: "batch-unrec",
+            totalRecipients: 1,
+            totalAmount: "5.0000000",
+            totalTransactions: 1,
+            network: "testnet",
+            timestamp: new Date().toISOString(),
+            results: [
+                {
+                    recipient: RECIPIENT_BAD,
+                    amount: "5.0000000",
+                    asset: "XLM",
+                    status: "unknown",
+                    error: "UNRECONCILED_SUBMISSION_ERROR: Transport failure occurred",
+                    rowIndex: 1,
+                },
+            ],
+            summary: { successful: 0, failed: 1 },
+        };
+        const unrecJobId = createJob(payments, "testnet", OWNER);
+        updateJob(unrecJobId, { status: "completed", result: unreconciledResult });
 
-        const res = await POST(makeRequest({ jobId: emptyPaymentsJobId, publicKey: OWNER }) as never);
+        const res = await POST(makeRequest({ jobId: unrecJobId, publicKey: OWNER }) as never);
         expect(res.status).toBe(400);
         const body = await res.json();
-        expect(body.error).toMatch(/no payment metadata.*preserved/i);
+        expect(body.error).toMatch(/Horizon reconciliation is pending/i);
     });
 });

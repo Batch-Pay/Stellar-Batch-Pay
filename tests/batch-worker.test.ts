@@ -26,6 +26,7 @@ vi.mock("stellar-sdk", async (importOriginal) => {
     TransactionBuilder: {
       fromXDR: vi.fn(() => ({
         sign: vi.fn(),
+        toEnvelope: () => ({ toXDR: () => "mock-worker-xdr" }),
       })),
     },
   };
@@ -44,7 +45,11 @@ describe("processJobInBackground — pre-signed (client-side) path", () => {
     // Restore the default envelope shape so a per-test override (e.g. the
     // multi-op #512 case) never leaks into later tests.
     vi.mocked(TransactionBuilder.fromXDR).mockImplementation(
-      () => ({ sign: vi.fn() }) as unknown as ReturnType<typeof TransactionBuilder.fromXDR>,
+      () =>
+        ({
+          sign: vi.fn(),
+          toEnvelope: () => ({ toXDR: () => "mock-worker-xdr" }),
+        }) as unknown as ReturnType<typeof TransactionBuilder.fromXDR>,
     );
   });
 
@@ -77,7 +82,10 @@ describe("processJobInBackground — pre-signed (client-side) path", () => {
     // out-of-band payment metadata (pure XDR submit, #300).
     const threeOpTx = { operations: [{}, {}, {}], sign: vi.fn() };
     vi.mocked(TransactionBuilder.fromXDR).mockReturnValue(
-      threeOpTx as unknown as ReturnType<typeof TransactionBuilder.fromXDR>,
+      {
+        ...threeOpTx,
+        toEnvelope: () => ({ toXDR: () => "mock-worker-three-op-xdr" }),
+      } as unknown as ReturnType<typeof TransactionBuilder.fromXDR>,
     );
 
     const { createJob, getJob } = await import("../lib/job-store");

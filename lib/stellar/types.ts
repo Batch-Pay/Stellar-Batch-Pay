@@ -73,7 +73,7 @@ export interface PaymentResult {
   recipient: string;
   amount: string;
   asset: string;
-  status: "success" | "failed";
+  status: "success" | "failed" | "unknown";
   transactionHash?: string;
   error?: string;
   rowIndex?: number; // #397: original row index, persisted for retry matching

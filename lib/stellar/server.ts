@@ -28,6 +28,7 @@ import {
 } from "./validator";
 import { getRecommendedFee } from "./fee-service";
 import { isBadSequenceError } from "./submit-errors";
+import { computeTransactionHash, isTransportError, reconcileTransaction } from "./reconciliation";
 import { horizonUrl } from "./network-config";
 import Big from "big.js";
 import { parseStellarAmount, formatStellarAmount, parseAsset, truncateMemoToBytes } from "./utils";
@@ -175,10 +176,17 @@ export class StellarService {
       return { results, submitted: false, totalAmount: totalAmountBig, needsReload: false };
     }
 
+    // Pre-compute transaction hash before sending to Horizon (#697)
+    const transaction = builder.setTimeout(300).build();
+    transaction.sign(this.keypair);
+    const txHash = computeTransactionHash(transaction);
+
+    // Assign transactionHash to all operations in this batch upfront
+    for (const i of addedResultIndices) {
+      results[i].transactionHash = txHash;
+    }
+
     try {
-      // Build, sign, and submit transaction
-      const transaction = builder.setTimeout(300).build();
-      transaction.sign(this.keypair);
       const result = await this.server.submitTransaction(transaction);
       sourceAccount.incrementSequenceNumber();
 
@@ -187,21 +195,41 @@ export class StellarService {
       // status/error and must never be flipped to success (#389).
       for (const i of addedResultIndices) {
         results[i].status = "success";
-        results[i].transactionHash = result.hash;
+        results[i].transactionHash = result.hash || txHash;
       }
 
       return { results, submitted: true, totalAmount: totalAmountBig, needsReload: false };
     } catch (error) {
-      // Only annotate the operations that belonged to this failed transaction;
-      // rows that failed validation already carry their own error message.
+      // #697: Handle transport-level errors by reconciling transaction status against Horizon
+      const isTransport = isTransportError(error);
+      let reconciledStatus: "success" | "failed" | "unknown" = "failed";
+
+      if (isTransport) {
+        try {
+          const rec = await reconcileTransaction(this.server, txHash);
+          reconciledStatus = rec.status;
+          if (rec.status === "success") {
+            sourceAccount.incrementSequenceNumber();
+          }
+        } catch {
+          reconciledStatus = "unknown";
+        }
+      }
+
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+
       for (const i of addedResultIndices) {
+        results[i].status = reconciledStatus;
         results[i].error =
-          error instanceof Error ? error.message : "Unknown error";
+          reconciledStatus === "unknown"
+            ? `UNRECONCILED_SUBMISSION_ERROR: ${errorMessage}`
+            : errorMessage;
       }
 
       return {
         results,
-        submitted: false,
+        submitted: reconciledStatus === "success",
         totalAmount: totalAmountBig,
         needsReload: isBadSequenceError(error),
       };

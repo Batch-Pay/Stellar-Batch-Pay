@@ -103,11 +103,24 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        // #697: Only retry failed payments whose status was confirmed failed on-chain or through reconciliation.
+        // Block retries for rows tagged with UNRECONCILED_SUBMISSION_ERROR until Horizon status is resolved.
+        const hasUnreconciledRows = job.result.results.some(
+            (r) => r.status === "unknown" || r.error?.startsWith("UNRECONCILED_SUBMISSION_ERROR"),
+        );
+        if (hasUnreconciledRows) {
+            logger.warn({ requestId, jobId }, "Retry blocked because Horizon reconciliation is still pending");
+            return NextResponse.json(
+                { error: "Retry is not available while Horizon reconciliation is pending" },
+                { status: 400 },
+            );
+        }
+
         const failedResults = job.result.results.filter((r) => r.status === "failed");
         if (failedResults.length === 0) {
-            logger.warn({ requestId, jobId }, "No failed payments to retry");
+            logger.warn({ requestId, jobId }, "No confirmed failed payments available to retry");
             return NextResponse.json(
-                { error: "No failed payments available for retry" },
+                { error: "No failed payments available for retry (or payments are pending Horizon reconciliation)" },
                 { status: 400 },
             );
         }

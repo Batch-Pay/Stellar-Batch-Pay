@@ -51,6 +51,18 @@ interface RequestBody {
 }
 
 const MAX_OPS = 100;
+const STROOPS_PER_XLM = 10_000_000;
+
+async function fetchCurrentBaseReserveXlm(server: Horizon.Server): Promise<number | undefined> {
+  try {
+    const latestLedger = await server.ledgers().order("desc").limit(1).call();
+    const record = latestLedger.records[0] as { base_reserve_in_stroops?: number | string } | undefined;
+    if (!record?.base_reserve_in_stroops) return undefined;
+    return Number(record.base_reserve_in_stroops) / STROOPS_PER_XLM;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function POST(request: NextRequest) {
   const rate = applyRateLimit(request, "batch-build");
@@ -119,7 +131,17 @@ export async function POST(request: NextRequest) {
     const balancesMap = buildBalancesMap(
       sourceAccount.balances as unknown as HorizonBalance[],
     );
-    const balanceCheck = validateBalances(payments, balancesMap, undefined, MAX_OPS);
+    const reserveSource = sourceAccount as unknown as {
+      subentry_count?: number | string;
+      num_sponsoring?: number | string;
+      num_sponsored?: number | string;
+    };
+    const balanceCheck = validateBalances(payments, balancesMap, undefined, MAX_OPS, {
+      baseReserveXlm: await fetchCurrentBaseReserveXlm(server),
+      subentryCount: Number(reserveSource.subentry_count ?? 0),
+      numSponsoring: Number(reserveSource.num_sponsoring ?? 0),
+      numSponsored: Number(reserveSource.num_sponsored ?? 0),
+    });
     if (!balanceCheck.all_sufficient) {
       const insufficient = balanceCheck.checks
         .filter((c) => !c.sufficient)

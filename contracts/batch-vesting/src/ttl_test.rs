@@ -20,7 +20,7 @@ fn test_ttl_bumping_logic() {
     let client = BatchVestingContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    client.__constructor(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,

@@ -53,7 +53,7 @@ fn matching_memos(env: &Env, len: u32) -> Vec<String> {
 
 fn setup_contract(env: &Env, client: &BatchVestingContractClient) {
     let admin = Address::generate(env);
-    client.set_admin(&admin);
+    client.__constructor(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -231,7 +231,7 @@ fn test_revoke_by_admin_fails() {
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&sender, &1000);
 
-    client.set_admin(&admin);
+    client.__constructor(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -773,7 +773,7 @@ fn test_batch_revoke_by_admin_fails() {
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&sender, &1000);
 
-    client.set_admin(&admin);
+    client.__constructor(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -846,7 +846,7 @@ fn test_batch_revoke_multiple_senders_fails_for_admin() {
     token_admin_client.mint(&sender1, &1000);
     token_admin_client.mint(&sender2, &1000);
 
-    client.set_admin(&admin);
+    client.__constructor(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -1497,6 +1497,26 @@ fn test_batch_revoke_mixed_valid_and_invalid() {
     assert_eq!(token.balance(&contract_id), 0);
 }
 
+// ─── Issue #695: Constructor-based admin initialization ───────────────────
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #6)")]
+fn test_constructor_initializes_admin_and_blocks_late_takeover() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, BatchVestingContract);
+    let client = BatchVestingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+
+    client.__constructor(&admin);
+
+    // A later set_admin call must not be able to seize admin rights.
+    client.set_admin(&attacker);
+}
+
 // ─── Issue #195: Admin re-claim after renouncement ───────────────────────────
 
 /// After renounce_admin, set_admin must be permanently blocked so no one can
@@ -1514,7 +1534,7 @@ fn test_set_admin_after_renounce_fails() {
     let attacker = Address::generate(&env);
 
     // Legitimate first-time admin initialisation
-    client.set_admin(&admin);
+    client.__constructor(&admin);
 
     // Admin renounces ownership
     client.renounce_admin(&admin);
@@ -1538,7 +1558,7 @@ fn test_set_admin_twice_fails() {
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
 
-    client.set_admin(&admin1);
+    client.__constructor(&admin1);
     // Second call must fail with AdminAlreadySet (#6)
     client.set_admin(&admin2);
 }
@@ -2157,7 +2177,7 @@ fn test_set_config() {
     let client = BatchVestingContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    client.__constructor(&admin);
 
     let fee_token = Address::generate(&env);
     let new_config = Config {
@@ -2192,7 +2212,7 @@ fn test_config_enforcement() {
     let client = BatchVestingContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    client.__constructor(&admin);
 
     client.set_config(&admin, &Config {
         max_batch_size: 2,
@@ -2231,7 +2251,7 @@ fn test_propose_and_accept_admin() {
     let admin = Address::generate(&env);
     let new_admin = Address::generate(&env);
 
-    client.set_admin(&admin);
+    client.__constructor(&admin);
 
     // Step 1: Propose
     client.propose_admin(&admin, &new_admin);
@@ -2263,7 +2283,7 @@ fn test_only_pending_admin_can_accept() {
     let new_admin = Address::generate(&env);
     let attacker = Address::generate(&env);
 
-    client.set_admin(&admin);
+    client.__constructor(&admin);
     client.propose_admin(&admin, &new_admin);
 
     // Attacker tries to accept — must fail with Unauthorized (#9)
@@ -2431,7 +2451,7 @@ fn test_upgrade_flow() {
     let client = BatchVestingContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    client.__constructor(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -2471,7 +2491,7 @@ fn test_execute_upgrade_timelock_panic() {
     let contract_id = env.register_contract(None, BatchVestingContract);
     let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    client.__constructor(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3050,10 +3070,8 @@ fn test_set_fee_config_uses_whitelisted_asset_from_config() {
     let (token_a, token_admin_a) = create_token_contract(&env, &Address::generate(&env));
     let (token_b, token_admin_b) = create_token_contract(&env, &Address::generate(&env));
 
-    // Set admin
-    client.set_admin(&admin);
-
-    // Initialize config with token_a as the whitelisted fee asset
+    // Initialize admin and config with token_a as the whitelisted fee asset
+    client.__constructor(&admin);
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3107,8 +3125,8 @@ fn test_deposit_fails_without_whitelisted_fee_asset() {
     let (token_a, token_admin_a) = create_token_contract(&env, &Address::generate(&env));
     let (token_b, token_admin_b) = create_token_contract(&env, &Address::generate(&env));
 
-    // Set admin and config with token_a as fee asset
-    client.set_admin(&admin);
+    // Initialize admin and config with token_a as fee asset
+    client.__constructor(&admin);
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3158,8 +3176,8 @@ fn test_fees_collected_in_whitelisted_asset_not_deposit_token() {
     let (token_xlm, token_admin_xlm) = create_token_contract(&env, &Address::generate(&env));
     let (token_usdc, token_admin_usdc) = create_token_contract(&env, &Address::generate(&env));
 
-    // Set admin and config with XLM as fee asset
-    client.set_admin(&admin);
+    // Initialize admin and config with XLM as fee asset
+    client.__constructor(&admin);
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3210,8 +3228,8 @@ fn test_fee_config_event_includes_whitelisted_asset() {
     let (token_xlm, _) = create_token_contract(&env, &Address::generate(&env));
     let treasury = Address::generate(&env);
 
-    // Set admin and config
-    client.set_admin(&admin);
+    // Initialize admin and config
+    client.__constructor(&admin);
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3251,8 +3269,8 @@ fn test_zero_fees_with_whitelisted_asset() {
 
     let (token, token_admin) = create_token_contract(&env, &Address::generate(&env));
 
-    // Set admin and config
-    client.set_admin(&admin);
+    // Initialize admin and config
+    client.__constructor(&admin);
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,

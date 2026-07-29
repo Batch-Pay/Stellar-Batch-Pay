@@ -214,6 +214,12 @@ impl BatchVestingContract {
         env.storage().persistent().set(&DataKey::Admin, admin);
     }
 
+    fn initialize_admin(env: &Env, admin: &Address) {
+        Self::set_admin_internal(env, admin);
+        Self::mark_admin_initialized(env);
+        Self::extend_ttl_admin(env);
+    }
+
     fn remove_admin_internal(env: &Env) {
         env.storage().persistent().remove(&DataKey::Admin);
     }
@@ -701,19 +707,26 @@ impl BatchVestingContract {
         }
     }
 
-    /// Set admin for the contract. Only the very first call can set the admin.
+    /// Initialize the contract admin at deployment time.
     ///
-    /// #195: Checks the permanent `AdminInitialized` flag rather than whether
-    /// an admin is currently stored.  This prevents re-claiming admin rights
-    /// after `renounce_admin` has been called.
-    pub fn set_admin(env: Env, admin: Address) {
-        admin.require_auth();
+    /// This constructor binds the intended admin once, atomically during
+    /// deployment/initialization, so no unrelated account can later claim the
+    /// admin role through a separate first-claim step.
+    pub fn __constructor(env: Env, admin: Address) {
         if Self::is_admin_initialized(&env) {
             soroban_sdk::panic_with_error!(&env, VestingError::AdminAlreadySet);
         }
-        Self::set_admin_internal(&env, &admin);
-        Self::mark_admin_initialized(&env);
-        Self::extend_ttl_admin(&env);
+        Self::initialize_admin(&env, &admin);
+    }
+
+    /// Legacy admin initialization entrypoint.
+    ///
+    /// This is kept as a compatibility surface for existing integrations, but
+    /// it no longer acts as a public first-claim step. The intended admin must
+    /// be initialized via the constructor during deployment.
+    pub fn set_admin(env: Env, admin: Address) {
+        let _ = admin;
+        soroban_sdk::panic_with_error!(&env, VestingError::AdminAlreadySet);
     }
 
     /// Propose a new admin. Only the current admin can nominate a successor.

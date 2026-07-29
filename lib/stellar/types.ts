@@ -149,6 +149,8 @@ export interface HorizonBalance {
   asset_type: "native" | "credit_alphanum4" | "credit_alphanum12";
   asset_code?: string;
   asset_issuer?: string;
+  buying_liabilities?: string;
+  selling_liabilities?: string;
 }
 
 export interface BalancesMap {

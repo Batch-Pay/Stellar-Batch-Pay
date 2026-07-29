@@ -15,6 +15,20 @@ import {
 } from "./types";
 import { parseStellarAmount, formatAmount } from "./utils";
 
+export interface BalanceValidationOptions {
+  baseReserveXlm?: number;
+  subentryCount?: number;
+  numSponsoring?: number;
+  numSponsored?: number;
+}
+
+const DEFAULT_BASE_RESERVE_XLM = 0.5;
+const FEE_PER_OPERATION_XLM = 0.00001; // stroops: 100 / 10^7
+
+function toNumberAmount(value: string): number {
+  return Number(parseStellarAmount(value).toString());
+}
+
 function isValidPublicKey(value: string): boolean {
   return StrKey.isValidEd25519PublicKey(value);
 }
@@ -256,7 +270,10 @@ export function buildBalancesMap(balances: HorizonBalance[]): BalancesMap {
       entry.asset_type === "native"
         ? "XLM"
         : `${entry.asset_code}:${entry.asset_issuer}`;
-    map[key] = Number(entry.balance);
+    const balance = parseStellarAmount(entry.balance);
+    const sellingLiabilities = parseStellarAmount(entry.selling_liabilities ?? "0");
+    const spendable = balance.minus(sellingLiabilities);
+    map[key] = Number((spendable.gt(0) ? spendable : parseStellarAmount("0")).toString());
   }
   return map;
 }
@@ -274,9 +291,8 @@ export function resolveAssetKey(asset: string): string {
  * aggregated so cumulative spend is checked.
  *
  * For XLM, reserves the following:
- * - Base reserve: 2 XLM (minimum account balance)
+ * - Minimum account reserve: (2 + subentries + sponsoring - sponsored) * baseReserve
  * - Transaction fees: ~0.00001 XLM per operation
- * - Subentry reserves: 0.5 XLM per trustline (if creating trustlines)
  *
  * @param instructions Payment instructions to validate
  * @param balancesMap Current account balances from Horizon
@@ -288,22 +304,18 @@ export function validateBalances(
   balancesMap: BalancesMap,
   estimatedOperations?: number,
   maxOperationsPerTransaction: number = 100,
+  options: BalanceValidationOptions = {},
 ): BalanceValidationResult {
   // Aggregate required amounts per asset
   const requiredByAsset: Record<string, number> = {};
   for (const instruction of instructions) {
     const key = resolveAssetKey(instruction.asset);
     requiredByAsset[key] =
-      (requiredByAsset[key] ?? 0) + Number(instruction.amount);
+      (requiredByAsset[key] ?? 0) + toNumberAmount(instruction.amount);
   }
 
   const checks = [];
   let allSufficient = true;
-
-  // Stellar constants
-  const BASE_RESERVE_XLM = 2; // minimum account balance
-  const FEE_PER_OPERATION_XLM = 0.00001; // stroops: 100 / 10^7
-  const SUBENTRY_RESERVE_XLM = 0.5; // per trustline
 
   // Calculate XLM reserves
   const finalOps = estimatedOperations !== undefined
@@ -311,7 +323,13 @@ export function validateBalances(
     : Math.max(instructions.length, 1);
 
   const transactionFees = finalOps * FEE_PER_OPERATION_XLM;
-  const xlmReserved = BASE_RESERVE_XLM + transactionFees;
+  const reserveEntries =
+    2 +
+    (options.subentryCount ?? 0) +
+    (options.numSponsoring ?? 0) -
+    (options.numSponsored ?? 0);
+  const minimumReserve = Math.max(0, reserveEntries) * (options.baseReserveXlm ?? DEFAULT_BASE_RESERVE_XLM);
+  const xlmReserved = minimumReserve + transactionFees;
 
   for (const [assetKey, required] of Object.entries(requiredByAsset)) {
     const available = balancesMap[assetKey] ?? 0; // missing trustline → zero

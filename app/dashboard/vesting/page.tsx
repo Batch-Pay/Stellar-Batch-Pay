@@ -10,6 +10,7 @@ import { useWallet } from "@/contexts/WalletContext";
 import { toast } from "sonner";
 import type { PaymentInstruction } from "@/lib/stellar/types";
 import { buildDepositTransaction } from "@/lib/stellar/vesting";
+import { resolveVestingContractId } from "@/lib/stellar/vesting-config";
 import { parsePaymentFile } from "@/lib/stellar/parser";
 import { Networks, TransactionBuilder } from "stellar-sdk";
 import { t } from "@/lib/i18n";
@@ -153,7 +154,14 @@ export default function VestingPage() {
       const vestingStep = parseInt(vestingConfig.vestingStep);
       const cliffTime = startTime;
 
-      const contractId = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+      let contractId: string;
+      try {
+        contractId = resolveVestingContractId(network);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Invalid vesting contract configuration";
+        toast.error(msg);
+        return;
+      }
 
       const unsignedXdr = await buildDepositTransaction(
         contractId,
@@ -237,6 +245,9 @@ export default function VestingPage() {
 
     try {
       setIsProcessing(true);
+      const network = expectedNetwork === "mainnet" ? "mainnet" : "testnet";
+      const contractId = resolveVestingContractId(network);
+
       const claimRes = await fetch("/api/vesting-claim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -245,7 +256,7 @@ export default function VestingPage() {
           network: expectedNetwork,
           recipient: schedule.recipient,
           amount: schedule.claimableAmount,
-          contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+          contractId,
         }),
       });
 
@@ -274,6 +285,9 @@ export default function VestingPage() {
 
     try {
       setIsProcessing(true);
+      const network = expectedNetwork === "mainnet" ? "mainnet" : "testnet";
+      const contractId = resolveVestingContractId(network);
+
       const revokeRes = await fetch("/api/vesting-revoke", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -281,7 +295,7 @@ export default function VestingPage() {
           publicKey,
           network: expectedNetwork,
           recipients: schedules.map((s) => s.recipient),
-          contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+          contractId,
         }),
       });
 

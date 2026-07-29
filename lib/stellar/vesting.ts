@@ -420,6 +420,72 @@ export async function buildRevokeTransaction(
   return buildSorobanTransaction(contractId, operation, network, publicKey);
 }
 
+/** One (recipient, index) pair for {@link buildBatchRevokeTransaction}. */
+export interface VestingRevokeRequest {
+  recipient: string;
+  index: number;
+}
+
+/**
+ * Encode a contract `RevokeRequest { recipient, index }` as an ScMap.
+ * Map keys are sorted alphabetically (`index` before `recipient`) as required
+ * by the Soroban XDR encoding rules.
+ */
+function revokeRequestToScVal(request: VestingRevokeRequest): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("index"),
+      val: nativeToScVal(request.index, { type: "u32" }),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("recipient"),
+      val: new Address(request.recipient).toScVal(),
+    }),
+  ]);
+}
+
+/**
+ * Sort revoke requests so each recipient's indices appear in strictly
+ * descending order — required by `batch_revoke` / `revoke_batch` (#308/#505).
+ * Recipients are grouped for a stable, deterministic order.
+ */
+export function sortRevokeRequestsDescending(
+  requests: VestingRevokeRequest[],
+): VestingRevokeRequest[] {
+  return [...requests].sort((a, b) => {
+    if (a.recipient !== b.recipient) {
+      return a.recipient < b.recipient ? -1 : 1;
+    }
+    return b.index - a.index;
+  });
+}
+
+/**
+ * Build an unsigned transaction to revoke multiple vesting schedules in one
+ * `batch_revoke(caller, requests)` call. Requests are sorted into the
+ * strictly-descending-per-recipient order the contract requires.
+ */
+export async function buildBatchRevokeTransaction(
+  contractId: string,
+  requests: VestingRevokeRequest[],
+  network: "testnet" | "mainnet",
+  publicKey: string,
+): Promise<string> {
+  if (requests.length === 0) {
+    throw new Error("batch_revoke requires at least one (recipient, index) pair");
+  }
+
+  const sorted = sortRevokeRequestsDescending(requests);
+  const contract = new Contract(contractId);
+  const operation = contract.call(
+    "batch_revoke",
+    new Address(publicKey).toScVal(),
+    xdr.ScVal.scvVec(sorted.map(revokeRequestToScVal)),
+  );
+
+  return buildSorobanTransaction(contractId, operation, network, publicKey);
+}
+
 /**
  * Build an unsigned transaction to bump the contract instance TTL.
  */

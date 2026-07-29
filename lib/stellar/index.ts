@@ -30,10 +30,13 @@ export {
   buildDepositTransaction,
   buildClaimTransaction,
   buildRevokeTransaction,
+  buildBatchRevokeTransaction,
+  sortRevokeRequestsDescending,
   buildTransferVestingRightsTransaction,
   buildBumpInstanceTtlTransaction,
   buildBumpVestingTtlTransaction,
 } from './vesting';
+export type { VestingRevokeRequest } from './vesting';
 export {
   parseVestingClaimedPayload,
   parseVestingDeposited,

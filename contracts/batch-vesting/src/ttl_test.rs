@@ -16,11 +16,9 @@ fn test_ttl_bumping_logic() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let contract_id = env.register(BatchVestingContract, BatchVestingContractArgs::__constructor(&admin));
+    let client = BatchVestingContractClient::new(&env, &contract_id);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,

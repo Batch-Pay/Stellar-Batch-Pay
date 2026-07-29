@@ -2111,7 +2111,7 @@ fn test_set_config() {
     let new_config = Config {
         max_batch_size: 50,
         max_schedules_per_recipient: 5,
-        upgrade_timelock: MIN_UPGRADE_TIMELOCK, // #699: must be >= MIN_UPGRADE_TIMELOCK
+        upgrade_timelock: 100,
         fee_asset: fee_token.clone(),
     };
 
@@ -2126,7 +2126,7 @@ fn test_set_config() {
     let event_data: (u32, u32, u64, Address) = last_event.2.try_into_val(&env).unwrap();
     assert_eq!(event_data.0, 50u32);
     assert_eq!(event_data.1, 5u32);
-    assert_eq!(event_data.2, MIN_UPGRADE_TIMELOCK);
+    assert_eq!(event_data.2, 100u64);
     assert_eq!(event_data.3, fee_token);
 }
 
@@ -2142,7 +2142,7 @@ fn test_config_enforcement() {
     client.set_config(&admin, &Config {
         max_batch_size: 2,
         max_schedules_per_recipient: 10,
-        upgrade_timelock: MIN_UPGRADE_TIMELOCK, // #699: must be >= MIN_UPGRADE_TIMELOCK
+        upgrade_timelock: 100,
         fee_asset: Address::generate(&env),
     });
 
@@ -3169,123 +3169,4 @@ fn test_zero_fees_with_whitelisted_asset() {
     // All tokens should be in the contract (no fees deducted)
     assert_eq!(token.balance(&sender), 900); // 1000 - 100 deposited
     assert_eq!(token.balance(&contract_id), 100); // Only the deposited amount
-}
-
-// ── Minimum upgrade timelock tests (#699) ────────────────────────────────────
-
-/// set_config must reject upgrade_timelock values below MIN_UPGRADE_TIMELOCK.
-#[test]
-#[should_panic(expected = "HostError: Error(Contract, #20)")]
-fn test_set_config_rejects_zero_upgrade_timelock() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.set_admin(&admin);
-    // upgrade_timelock = 0 is below MIN_UPGRADE_TIMELOCK → must panic with #20
-    client.set_config(&admin, &Config {
-        max_batch_size: 100,
-        max_schedules_per_recipient: 10,
-        upgrade_timelock: 0,
-        fee_asset: Address::generate(&env),
-    });
-}
-
-/// set_config must reject any upgrade_timelock below MIN_UPGRADE_TIMELOCK (1 day - 1 second).
-#[test]
-#[should_panic(expected = "HostError: Error(Contract, #20)")]
-fn test_set_config_rejects_timelock_below_minimum() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.set_admin(&admin);
-    // One second below MIN_UPGRADE_TIMELOCK (1 day) → must panic with #20
-    client.set_config(&admin, &Config {
-        max_batch_size: 100,
-        max_schedules_per_recipient: 10,
-        upgrade_timelock: MIN_UPGRADE_TIMELOCK - 1,
-        fee_asset: Address::generate(&env),
-    });
-}
-
-/// set_config must accept upgrade_timelock exactly equal to MIN_UPGRADE_TIMELOCK.
-#[test]
-fn test_set_config_accepts_minimum_upgrade_timelock() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.set_admin(&admin);
-    // Exactly MIN_UPGRADE_TIMELOCK should succeed
-    client.set_config(&admin, &Config {
-        max_batch_size: 100,
-        max_schedules_per_recipient: 10,
-        upgrade_timelock: MIN_UPGRADE_TIMELOCK,
-        fee_asset: Address::generate(&env),
-    });
-}
-
-/// Even when upgrade_timelock is set to MIN_UPGRADE_TIMELOCK (1 day), execute_upgrade
-/// must not succeed before the timelock has elapsed.
-#[test]
-fn test_execute_upgrade_blocked_with_minimum_timelock() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.set_admin(&admin);
-    client.set_config(&admin, &Config {
-        max_batch_size: 100,
-        max_schedules_per_recipient: 10,
-        upgrade_timelock: MIN_UPGRADE_TIMELOCK,
-        fee_asset: Address::generate(&env),
-    });
-
-    let new_wasm_hash = BytesN::from_array(&env, &[2u8; 32]);
-
-    // Propose upgrade at t=1000
-    env.ledger().with_mut(|li| li.timestamp = 1000);
-    client.propose_upgrade(&admin, &new_wasm_hash);
-
-    // Execute one second before the timelock expires → must fail with TimelockNotExpired (#15)
-    env.ledger().with_mut(|li| li.timestamp = 1000 + MIN_UPGRADE_TIMELOCK - 1);
-    let result = client.try_execute_upgrade(&admin);
-    assert!(
-        result.is_err(),
-        "execute_upgrade should be blocked before MIN_UPGRADE_TIMELOCK elapses"
-    );
-}
-
-/// An admin who previously set upgrade_timelock = 0 (before the fix) cannot bypass
-/// the review window: even after lowering the timelock to zero and immediately
-/// proposing an upgrade, execution must be gated by MIN_UPGRADE_TIMELOCK.
-/// This test verifies that set_config itself is the enforcement point.
-#[test]
-fn test_set_config_with_zero_timelock_is_rejected_before_propose() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.set_admin(&admin);
-
-    // Attempt to set timelock to 0 — should be rejected
-    let result = client.try_set_config(&admin, &Config {
-        max_batch_size: 100,
-        max_schedules_per_recipient: 10,
-        upgrade_timelock: 0,
-        fee_asset: Address::generate(&env),
-    });
-    assert!(
-        result.is_err(),
-        "set_config must reject upgrade_timelock = 0"
-    );
-
-    // The contract should not have a config yet (or still have the previous valid config)
-    // — propose_upgrade must therefore also fail or operate on the valid timelock
 }

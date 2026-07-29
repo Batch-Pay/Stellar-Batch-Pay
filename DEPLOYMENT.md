@@ -48,9 +48,36 @@ export NODE_ENV="production"
 - Automated test pipelines (e.g. `tests/batch-submit.test.ts` sets this to `"true"`)
 - Staging environments running automated batch jobs
 
+### `SERVER_SIGNING_API_KEY` — Cryptographic Authorization (#696)
+
+| Variable                  | Default         | Purpose                                                                                 |
+| ------------------------- | --------------- | --------------------------------------------------------------------------------------- |
+| `SERVER_SIGNING_API_KEY`  | `""` (unset)    | Secret API key required in the `Authorization: Bearer` header for server-signing requests |
+
+When `ALLOW_SERVER_SIGNING=true`, the server now enforces cryptographic authorization
+on `/api/batch-submit` and `/api/batch-retry`. Callers must include the API key in the
+`Authorization` header:
+
+```
+Authorization: Bearer <SERVER_SIGNING_API_KEY>
+```
+
+**Generate a secure key:**
+
+```bash
+openssl rand -hex 32
+# Example output: a1b2c3d4e5f6...64-char-hex-string
+```
+
+**Backward-compatibility:** If `SERVER_SIGNING_API_KEY` is not set, the server
+accepts server-signing requests without credential verification (the previous
+behavior) but logs a deprecation warning on every request. Operators should
+configure this variable in every deployment where server signing is enabled.
+
 **Security warnings:**
 
 - `ALLOW_SERVER_SIGNING=true` centralises key risk on the server. A compromised server can sign and submit arbitrary transactions.
+- Always set `SERVER_SIGNING_API_KEY` when enabling server signing — it provides defense-in-depth beyond the network-layer controls.
 - Never enable on public-facing production endpoints without additional access controls (VPN, IP allowlist, or mutual TLS).
 - Requires `STELLAR_SECRET_KEY` to be set; the flag has no effect without it.
 - Audit all access logs when this flag is active.
@@ -59,6 +86,7 @@ export NODE_ENV="production"
 # Staging / internal use only
 export ALLOW_SERVER_SIGNING=true
 export STELLAR_SECRET_KEY="S..."
+export SERVER_SIGNING_API_KEY="$(openssl rand -hex 32)"
 
 # Production (public) — leave unset; users sign via Freighter wallet
 # ALLOW_SERVER_SIGNING is intentionally absent
@@ -69,6 +97,22 @@ export STELLAR_SECRET_KEY="S..."
 > ```json
 > {
 >   "error": "Server-side signing is disabled. Use client-side signing with a connected wallet, or enable ALLOW_SERVER_SIGNING=true in server configuration."
+> }
+> ```
+>
+> **API error for missing credential (401):**
+>
+> ```json
+> {
+>   "error": "Missing or malformed Authorization header. Server-signing requests require an 'Authorization: Bearer <SERVER_SIGNING_API_KEY>' header."
+> }
+> ```
+>
+> **API error for invalid credential (403):**
+>
+> ```json
+> {
+>   "error": "Invalid server-signing API key. The provided Authorization token does not match the configured SERVER_SIGNING_API_KEY."
 > }
 > ```
 >

@@ -23,6 +23,7 @@ import { processJobInBackground } from "@/lib/stellar/batch-worker";
 import { safeJsonResponse } from "@/lib/safe-json";
 import { logger } from "@/lib/logger";
 import { createHash } from "crypto";
+import { validateServerSigningAuth } from "@/lib/server-signing-auth";
 
 /**
  * Derive the public key from a secret and return it, or return null if the
@@ -98,6 +99,22 @@ export async function POST(request: NextRequest) {
             "Server-side retry is disabled. Enable ALLOW_SERVER_SIGNING=true in server configuration to retry failed payments from stored jobs.",
         },
         { status: 403 },
+      );
+    }
+
+    // #696: Require cryptographic authorization for server-signing requests.
+    const authResult = validateServerSigningAuth(
+      request.headers.get("authorization"),
+      requestId,
+    );
+    if (!authResult.valid) {
+      logger.warn(
+        { requestId, jobId },
+        `Server-signing auth rejected: ${authResult.error}`,
+      );
+      return NextResponse.json(
+        { error: authResult.error },
+        { status: authResult.status ?? 403 },
       );
     }
 

@@ -42,6 +42,7 @@ import type {
 import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
 import { canonicalizeIdempotencyPayload } from "@/lib/idempotency";
 import { logger } from "@/lib/logger";
+import { validateServerSigningAuth } from "@/lib/server-signing-auth";
 
 interface RequestBody {
   payments?: PaymentInstruction[];
@@ -294,6 +295,20 @@ export async function POST(request: NextRequest) {
             "Server-side signing is disabled. Use client-side signing with a connected wallet, or enable ALLOW_SERVER_SIGNING=true in server configuration.",
         },
         { status: 403 },
+      );
+    }
+
+    // #696: Require cryptographic authorization for server-signing requests.
+    // The caller must present a valid API key via the Authorization header.
+    const authResult = validateServerSigningAuth(
+      request.headers.get("authorization"),
+      requestId,
+    );
+    if (!authResult.valid) {
+      logger.warn({ requestId }, `Server-signing auth rejected: ${authResult.error}`);
+      return NextResponse.json(
+        { error: authResult.error },
+        { status: authResult.status ?? 403 },
       );
     }
 

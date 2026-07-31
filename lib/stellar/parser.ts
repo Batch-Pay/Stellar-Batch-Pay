@@ -39,6 +39,14 @@ export function parseJSON(content: string): PaymentInstruction[] {
     }
 
     return rawInstructions.map((item: Record<string, unknown>, index: number) => {
+      // #714: Reject numeric JSON amounts — JSON.parse applies IEEE-754 rounding
+      // before validation, silently altering values like 99999999999.9999999 → 1e11
+      if (typeof item.amount === 'number') {
+        throw new Error(
+          `Row ${index + 1}: amount must be a quoted string, not a number (received ${item.amount})`
+        );
+      }
+
       const instruction: PaymentInstruction = {
         address: sanitizeValue(String(item.address ?? '')),
         amount: sanitizeValue(String(item.amount ?? '')),

@@ -54,3 +54,14 @@ export type {
   VestingTransferredEventPayload,
   FeeCollectedEventPayload,
 } from './vesting-events';
+export {
+  acquireGuard,
+  releaseGuard,
+  isLocked,
+  clearAllGuards,
+  ReentrancyError,
+  makeGuardKey,
+  getHolderId,
+  DEFAULT_LOCK_TTL_MS,
+} from './reentrancy-guard';
+export type { LockRecord, AcquireGuardOptions, GuardOperation } from './reentrancy-guard';

@@ -15,6 +15,7 @@ import {
   buildDepositTransaction,
   buildRevokeTransaction,
 } from "@/lib/stellar/vesting";
+import { acquireGuard, ReentrancyError } from "@/lib/stellar/reentrancy-guard";
 import { resolveVestingContractId } from "@/lib/stellar/vesting-config";
 import { parsePaymentFile } from "@/lib/stellar/parser";
 import { Networks, TransactionBuilder } from "stellar-sdk";
@@ -185,6 +186,17 @@ export default function VestingPage() {
       return;
     }
 
+    let release: (() => void) | null = null;
+    try {
+      release = await acquireGuard(publicKey, "deposit");
+    } catch (err) {
+      if (err instanceof ReentrancyError) {
+        toast.error(err.message);
+        return;
+      }
+      throw err;
+    }
+
     try {
       setIsProcessing(true);
 
@@ -253,6 +265,9 @@ export default function VestingPage() {
       console.error(err);
     } finally {
       setIsProcessing(false);
+      if (release) {
+        release();
+      }
     }
   };
 
@@ -260,6 +275,17 @@ export default function VestingPage() {
     if (!publicKey) {
       toast.error(t("common.walletNotConnected"));
       return;
+    }
+
+    let release: (() => void) | null = null;
+    try {
+      release = await acquireGuard(publicKey, "claim");
+    } catch (err) {
+      if (err instanceof ReentrancyError) {
+        toast.error(err.message);
+        return;
+      }
+      throw err;
     }
 
     try {
@@ -310,6 +336,9 @@ export default function VestingPage() {
       console.error(err);
     } finally {
       setIsProcessing(false);
+      if (release) {
+        release();
+      }
     }
   };
 
@@ -326,6 +355,17 @@ export default function VestingPage() {
 
     if (!confirm("Are you sure you want to revoke these vesting schedules?")) {
       return;
+    }
+
+    let release: (() => void) | null = null;
+    try {
+      release = await acquireGuard(publicKey, "revoke");
+    } catch (err) {
+      if (err instanceof ReentrancyError) {
+        toast.error(err.message);
+        return;
+      }
+      throw err;
     }
 
     try {
@@ -369,6 +409,9 @@ export default function VestingPage() {
       console.error(err);
     } finally {
       setIsProcessing(false);
+      if (release) {
+        release();
+      }
     }
   };
 

@@ -43,6 +43,7 @@ import { getRecommendedFee } from "@/lib/stellar/fee-service";
 import { MAX_UPLOAD_ROWS } from "@/lib/stellar/parser";
 import { truncateMemoToBytes } from "@/lib/stellar/utils";
 import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
+import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
 
 interface RequestBody {
   payments: PaymentInstruction[];
@@ -67,6 +68,8 @@ async function fetchCurrentBaseReserveXlm(server: Horizon.Server): Promise<numbe
 export async function POST(request: NextRequest) {
   const rate = await applyRateLimit(request, "batch-build");
   if (rate.blocked) return rate.response!;
+
+  const requestId = getRequestId(request);
 
   try {
     const body = (await request.json()) as RequestBody;
@@ -288,20 +291,20 @@ export async function POST(request: NextRequest) {
       maxTransactionBytes: STELLAR_TRANSACTION_SIZE_LIMIT_BYTES,
     }), rate);
   } catch (error) {
-    console.error("Batch build error:", error);
     if (error instanceof BatchMemoConflictError) {
       return setRateLimitHeaders(safeJsonResponse(
-        { error: error.message },
+        { error: error.message, code: "BAD_REQUEST", requestId },
         { status: 400 },
       ), rate);
     }
 
-    return setRateLimitHeaders(safeJsonResponse(
-      {
-        error:
-          error instanceof Error ? error.message : "Internal server error",
-      },
-      { status: 500 },
-    ), rate);
+    return setRateLimitHeaders(
+      sanitizedErrorResponse(error, {
+        requestId,
+        status: 500,
+        logMessage: "Batch build error",
+      }),
+      rate,
+    );
   }
 }

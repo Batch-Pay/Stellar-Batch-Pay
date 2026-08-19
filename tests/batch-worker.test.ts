@@ -64,11 +64,11 @@ describe("processJobInBackground — pre-signed (client-side) path", () => {
     const signedTransactions = ["AAAA"];
     const payments = [{ address: recipient, amount: "1", asset: "XLM" }];
 
-    const jobId = createJob(payments, "testnet", owner, signedTransactions);
+    const jobId = await createJob(payments, "testnet", owner, signedTransactions);
 
     await processJobInBackground(jobId, payments, "testnet");
 
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
 
     expect(job?.status).toBe("failed");
     expect(job?.result?.summary.failed).toBe(1);
@@ -95,11 +95,11 @@ describe("processJobInBackground — pre-signed (client-side) path", () => {
     const signedTransactions = ["MULTIOP"];
 
     // Job created with no payments — the empty-payments path under test.
-    const jobId = createJob([], "testnet", owner, signedTransactions);
+    const jobId = await createJob([], "testnet", owner, signedTransactions);
 
     await processJobInBackground(jobId, [], "testnet", undefined, signedTransactions);
 
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
 
     expect(job?.status).toBe("completed");
     // successful must equal the op count (3), not 1-per-transaction.
@@ -124,11 +124,11 @@ describe("processJobInBackground — pre-signed (client-side) path", () => {
       { address: Keypair.random().publicKey(), amount: "2", asset: "XLM" },
     ];
 
-    const jobId = createJob(payments, "testnet", owner, signedTransactions);
+    const jobId = await createJob(payments, "testnet", owner, signedTransactions);
 
     await processJobInBackground(jobId, payments, "testnet", undefined, signedTransactions);
 
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
 
     expect(job?.status).toBe("completed");
     expect(job?.result?.summary.successful).toBeGreaterThan(0);
@@ -145,11 +145,11 @@ describe("processJobInBackground — pre-signed (client-side) path", () => {
     const payments = [{ address: Keypair.random().publicKey(), amount: "5", asset: "XLM" }];
     const signedTransactions = ["CCCC"];
 
-    const jobId = createJob(payments, "testnet", owner, signedTransactions);
+    const jobId = await createJob(payments, "testnet", owner, signedTransactions);
 
     await processJobInBackground(jobId, payments, "testnet");
 
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     expect(["failed", "completed"]).toContain(job?.status);
   });
 
@@ -163,12 +163,12 @@ describe("processJobInBackground — pre-signed (client-side) path", () => {
     const payments = [{ address: Keypair.random().publicKey(), amount: "3", asset: "XLM" }];
     const signedTransactions = ["DDDD"];
 
-    const jobId = createJob(payments, "testnet", owner, signedTransactions);
+    const jobId = await createJob(payments, "testnet", owner, signedTransactions);
 
     // Do NOT pass signedTransactions — worker must recover them from job state
     await processJobInBackground(jobId, payments, "testnet");
 
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     expect(job?.status).toBe("completed");
     expect(mockSubmitTransaction).toHaveBeenCalledOnce();
   });
@@ -188,12 +188,12 @@ describe("processJobInBackground — pre-signed (client-side) path", () => {
     ];
     const signedTransactions = ["RECOVER"];
 
-    const jobId = createJob(payments, "testnet", owner, signedTransactions);
+    const jobId = await createJob(payments, "testnet", owner, signedTransactions);
 
     // Do NOT pass payments — worker must recover them from job state (#515)
     await processJobInBackground(jobId, [], "testnet", undefined, signedTransactions);
 
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     expect(job?.status).toBe("completed");
     // Results should contain real recipient addresses, not synthetic placeholders
     expect(job?.result?.results[0].recipient).toBe(recipient1);
@@ -209,14 +209,14 @@ describe("processJobInBackground — pre-signed (client-side) path", () => {
 
     const owner = Keypair.random().publicKey();
     const payments = [{ address: Keypair.random().publicKey(), amount: "1", asset: "XLM" }];
-    const jobId = createJob(payments, "testnet", owner, ["EEEE"]);
+    const jobId = await createJob(payments, "testnet", owner, ["EEEE"]);
 
     // Pre-mark as completed
-    updateJob(jobId, { status: "completed" });
+    await updateJob(jobId, { status: "completed" });
 
     await processJobInBackground(jobId, payments, "testnet");
 
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     expect(job?.status).toBe("completed");
     expect(mockSubmitTransaction).not.toHaveBeenCalled();
   });
@@ -249,7 +249,7 @@ describe("processJobInBackground — webhook delivery", () => {
     const payments = [{ address: Keypair.random().publicKey(), amount: "1", asset: "XLM" }];
 
     // No signed transactions and no secretKey — triggers "secretKey is required" throw
-    const jobId = createJob(payments, "testnet", owner);
+    const jobId = await createJob(payments, "testnet", owner);
 
     await processJobInBackground(jobId, payments, "testnet");
 
@@ -275,7 +275,7 @@ describe("processJobInBackground — concurrent processing guards (#508)", () =>
     const recipient = Keypair.random().publicKey();
     const payments = [{ address: recipient, amount: "1", asset: "XLM" }];
 
-    const jobId = createJob(payments, "testnet", owner, ["AAAA"]);
+    const jobId = await createJob(payments, "testnet", owner, ["AAAA"]);
 
     const claims = await Promise.all([
       claimJobForProcessing(jobId),
@@ -293,18 +293,18 @@ describe("processJobInBackground — concurrent processing guards (#508)", () =>
     const recipient = Keypair.random().publicKey();
     const payments = [{ address: recipient, amount: "1", asset: "XLM" }];
 
-    const jobId = createJob(payments, "testnet", owner, ["AAAA"]);
+    const jobId = await createJob(payments, "testnet", owner, ["AAAA"]);
 
-    const firstClaim = claimJobForProcessing(jobId);
+    const firstClaim = await claimJobForProcessing(jobId);
     expect(firstClaim).toBe(true);
 
-    const secondClaimImmediately = claimJobForProcessing(jobId);
+    const secondClaimImmediately = await claimJobForProcessing(jobId);
     expect(secondClaimImmediately).toBe(false);
 
     const staleTime = new Date(Date.now() - 40000).toISOString();
     getDb().prepare("UPDATE jobs SET updatedAt = ? WHERE jobId = ?").run(staleTime, jobId);
 
-    const thirdClaimStale = claimJobForProcessing(jobId);
+    const thirdClaimStale = await claimJobForProcessing(jobId);
     expect(thirdClaimStale).toBe(true);
   });
 
@@ -318,7 +318,7 @@ describe("processJobInBackground — concurrent processing guards (#508)", () =>
     const recipient = Keypair.random().publicKey();
     const payments = [{ address: recipient, amount: "1", asset: "XLM" }];
 
-    const jobId = createJob(payments, "testnet", owner, ["AAAA"]);
+    const jobId = await createJob(payments, "testnet", owner, ["AAAA"]);
 
     await Promise.all([
       processJobInBackground(jobId, payments, "testnet"),

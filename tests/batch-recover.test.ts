@@ -39,9 +39,9 @@ function makeRequest(params: Record<string, string>) {
 describe("GET /api/batch-recover", () => {
   let jobId: string;
 
-  beforeEach(() => {
-    jobId = createJob([], "testnet", PUBLIC_KEY);
-    updateJob(jobId, { status: "completed", result: completedResult });
+  beforeEach(async () => {
+    jobId = await createJob([], "testnet", PUBLIC_KEY);
+    await updateJob(jobId, { status: "completed", result: completedResult });
   });
 
   test("returns 200 with recovery data for a completed SQLite job", async () => {

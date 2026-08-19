@@ -164,7 +164,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const job = getJob(jobId, publicKey);
+    const job = await getJob(jobId, publicKey);
     if (!job || !job.result) {
       logger.warn({ requestId, jobId }, "Batch job not found or not completed");
       return NextResponse.json(
@@ -296,7 +296,7 @@ export async function POST(request: NextRequest) {
     const requestHash = hashRequestBody({ jobId, publicKey });
 
     // Create or replay the idempotent retry job (#550).
-    const idempotentResult = createIdempotentJob({
+    const idempotentResult = await createIdempotentJob({
       idempotencyKey,
       requestHash,
       payments: failedPayments,

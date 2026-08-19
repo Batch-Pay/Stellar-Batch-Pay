@@ -46,7 +46,7 @@ async function getFeeStats(server: Horizon.Server): Promise<FeeStats> {
 }
 
 export async function POST(request: NextRequest) {
-    const rate = applyRateLimit(request, "batch-submit-signed");
+    const rate = await applyRateLimit(request, "batch-submit-signed");
     if (rate.blocked) return rate.response!;
 
     try {

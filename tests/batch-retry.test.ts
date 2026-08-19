@@ -227,9 +227,9 @@ function makeRequest(
 describe("POST /api/batch-retry (#388)", () => {
   let jobId: string;
 
-  beforeEach(() => {
-    jobId = createJob(payments, "testnet", OWNER);
-    updateJob(jobId, { status: "completed", result: completedResult });
+  beforeEach(async () => {
+    jobId = await createJob(payments, "testnet", OWNER);
+    await updateJob(jobId, { status: "completed", result: completedResult });
   });
 
   afterEach(() => {
@@ -278,7 +278,7 @@ describe("POST /api/batch-retry (#388)", () => {
 
     // The retry job must be scoped to the owning wallet so the UI can poll
     // GET /api/batch-status with the same publicKey (the bug left it orphaned).
-    const retryJob = getJob(body.jobId, OWNER);
+    const retryJob = await getJob(body.jobId, OWNER);
     expect(retryJob).toBeDefined();
     expect(retryJob?.publicKey).toBe(OWNER);
     expect(retryJob?.payments).toHaveLength(1);
@@ -291,8 +291,8 @@ describe("POST /api/batch-retry (#388)", () => {
     // with failed payments. The attacker then calls POST /api/batch-retry
     // supplying the server's public key in an attempt to have the server wallet
     // fund the retry.
-    const attackerJobId = createJob(payments, "testnet", ATTACKER);
-    updateJob(attackerJobId, { status: "completed", result: completedResult });
+    const attackerJobId = await createJob(payments, "testnet", ATTACKER);
+    await updateJob(attackerJobId, { status: "completed", result: completedResult });
 
     // Attacker passes SERVER_PUBLIC_KEY to try to match the signing key,
     // but the job itself is owned by ATTACKER — the endpoint must reject.
@@ -335,7 +335,7 @@ describe("POST /api/batch-retry (#388)", () => {
     expect(body2.jobId).toBe(firstJobId);
     expect(body2.failedPayments).toBe(1);
 
-    const stored = getJob(firstJobId, OWNER);
+    const stored = await getJob(firstJobId, OWNER);
     expect(stored).toBeDefined();
   });
 
@@ -350,8 +350,8 @@ describe("POST /api/batch-retry (#388)", () => {
     );
     expect(res1.status).toBe(202);
 
-    const otherJobId = createJob(payments, "testnet", OWNER);
-    updateJob(otherJobId, { status: "completed", result: completedResult });
+    const otherJobId = await createJob(payments, "testnet", OWNER);
+    await updateJob(otherJobId, { status: "completed", result: completedResult });
 
     const res2 = await POST(
       makeRequest(
@@ -375,11 +375,11 @@ describe("POST /api/batch-retry (#388)", () => {
   });
 
   test("retries a pre-signed batch with stored payment metadata (#515)", async () => {
-    const preSignedJobId = createJob(payments, "testnet", OWNER, [
+    const preSignedJobId = await createJob(payments, "testnet", OWNER, [
       "AAAA",
       "BBBB",
     ]);
-    updateJob(preSignedJobId, { status: "completed", result: completedResult });
+    await updateJob(preSignedJobId, { status: "completed", result: completedResult });
 
     const res = await POST(
       makeRequest({ jobId: preSignedJobId, publicKey: OWNER }) as never,
@@ -390,7 +390,7 @@ describe("POST /api/batch-retry (#388)", () => {
     expect(body.jobId).toBeDefined();
     expect(body.failedPayments).toBe(1);
 
-    const retryJob = getJob(body.jobId, OWNER);
+    const retryJob = await getJob(body.jobId, OWNER);
     expect(retryJob).toBeDefined();
     expect(retryJob?.payments).toHaveLength(1);
     expect(retryJob?.payments[0].address).toBe(RECIPIENT_BAD);
@@ -416,8 +416,8 @@ describe("POST /api/batch-retry (#388)", () => {
       ],
       summary: { successful: 0, failed: 1 },
     };
-    const unrecJobId = createJob(payments, "testnet", OWNER);
-    updateJob(unrecJobId, { status: "completed", result: unreconciledResult });
+    const unrecJobId = await createJob(payments, "testnet", OWNER);
+    await updateJob(unrecJobId, { status: "completed", result: unreconciledResult });
 
     const res = await POST(
       makeRequest({ jobId: unrecJobId, publicKey: OWNER }) as never,

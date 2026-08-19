@@ -14,7 +14,7 @@ import { horizonUrl } from "@/lib/stellar/network-config";
 import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
 
 export async function GET(request: NextRequest) {
-  const rate = applyRateLimit(request, "tx-status");
+  const rate = await applyRateLimit(request, "tx-status");
   if (rate.blocked) return rate.response!;
 
   const { searchParams } = request.nextUrl;

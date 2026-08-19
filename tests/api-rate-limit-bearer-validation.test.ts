@@ -28,7 +28,7 @@ describe("Bearer Token Rate Limit Validation", () => {
           "x-forwarded-for": ip,
         },
       });
-      const res = applyRateLimit(req, "batch-submit");
+      const res = await applyRateLimit(req, "batch-submit");
       expect(res.blocked).toBe(false);
       expect(res.remaining).toBe(limit - i);
     }
@@ -41,7 +41,7 @@ describe("Bearer Token Rate Limit Validation", () => {
         "x-forwarded-for": ip,
       },
     });
-    const blockedRes = applyRateLimit(blockedReq, "batch-submit");
+    const blockedRes = await applyRateLimit(blockedReq, "batch-submit");
     expect(blockedRes.blocked).toBe(true);
     expect(blockedRes.remaining).toBe(0);
     expect(blockedRes.response?.status).toBe(429);
@@ -62,7 +62,7 @@ describe("Bearer Token Rate Limit Validation", () => {
       },
     });
 
-    const res = applyRateLimit(req, "batch-submit");
+    const res = await applyRateLimit(req, "batch-submit");
     expect(res.blocked).toBe(false);
     expect(res.limit).toBe(proLimit);
     expect(res.remaining).toBe(proLimit - 1);
@@ -79,7 +79,7 @@ describe("Bearer Token Rate Limit Validation", () => {
           authorization: `Bearer no-ip-token-${i}`,
         },
       });
-      const res = applyRateLimit(req, "batch-submit");
+      const res = await applyRateLimit(req, "batch-submit");
       expect(res.blocked).toBe(false);
     }
 
@@ -89,7 +89,7 @@ describe("Bearer Token Rate Limit Validation", () => {
         authorization: `Bearer no-ip-token-overflow`,
       },
     });
-    const blockedRes = applyRateLimit(blockedReq, "batch-submit");
+    const blockedRes = await applyRateLimit(blockedReq, "batch-submit");
     expect(blockedRes.blocked).toBe(true);
   });
 });

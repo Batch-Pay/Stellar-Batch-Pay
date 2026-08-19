@@ -65,7 +65,7 @@ async function fetchCurrentBaseReserveXlm(server: Horizon.Server): Promise<numbe
 }
 
 export async function POST(request: NextRequest) {
-  const rate = applyRateLimit(request, "batch-build");
+  const rate = await applyRateLimit(request, "batch-build");
   if (rate.blocked) return rate.response!;
 
   try {

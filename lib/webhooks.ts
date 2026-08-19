@@ -403,7 +403,7 @@ export async function triggerWebhooksWithRetry(
           });
 
           if (response.ok) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,
@@ -416,7 +416,7 @@ export async function triggerWebhooksWithRetry(
 
           // 4xx — don't retry
           if (response.status < 500) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,
@@ -430,7 +430,7 @@ export async function triggerWebhooksWithRetry(
 
           // 5xx — fall through to retry
           if (attempt === MAX_RETRIES) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,
@@ -444,7 +444,7 @@ export async function triggerWebhooksWithRetry(
         } catch (err) {
           const errorMessage = getWebhookDeliveryError(err);
           if (isNonRetryableWebhookError(err)) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,
@@ -456,7 +456,7 @@ export async function triggerWebhooksWithRetry(
           }
 
           if (attempt === MAX_RETRIES) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,

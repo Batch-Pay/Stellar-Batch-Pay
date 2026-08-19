@@ -43,7 +43,7 @@ describe("createIdempotentJob", () => {
       message: "created",
     }));
 
-    const outcome = createIdempotentJob({
+    const outcome = await createIdempotentJob({
       idempotencyKey: "idem-key-1",
       requestHash: "hash-1",
       payments,
@@ -60,12 +60,12 @@ describe("createIdempotentJob", () => {
       message: "created",
     });
 
-    const storedJob = getJob(outcome.jobId);
+    const storedJob = await getJob(outcome.jobId);
     expect(storedJob).toBeDefined();
     expect(storedJob?.network).toBe("testnet");
     expect(storedJob?.publicKey).toBe(OWNER_PUBLIC_KEY);
     expect(storedJob?.payments).toEqual(payments);
-    expect(countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(1);
+    expect(await countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(1);
   });
 
   test("replays existing response for same key and request hash", async () => {
@@ -76,7 +76,7 @@ describe("createIdempotentJob", () => {
       status: "queued" as const,
       marker: "first",
     }));
-    const first = createIdempotentJob({
+    const first = await createIdempotentJob({
       idempotencyKey: "idem-key-2",
       requestHash: "hash-2",
       payments,
@@ -90,7 +90,7 @@ describe("createIdempotentJob", () => {
       status: "queued" as const,
       marker: "replay-builder-should-not-run",
     }));
-    const replay = createIdempotentJob({
+    const replay = await createIdempotentJob({
       idempotencyKey: "idem-key-2",
       requestHash: "hash-2",
       payments,
@@ -104,14 +104,14 @@ describe("createIdempotentJob", () => {
     expect(replay.replayed).toBe(true);
     expect(replay.jobId).toBe(first.jobId);
     expect(replay.responseBody).toEqual(first.responseBody);
-    expect(countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(1);
+    expect(await countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(1);
   });
 
   test("throws IdempotencyConflictError for same key with different hash", async () => {
     const { createIdempotentJob, IdempotencyConflictError, countJobs } =
       await loadJobStore();
 
-    createIdempotentJob({
+    await createIdempotentJob({
       idempotencyKey: "idem-key-3",
       requestHash: "hash-3",
       payments,
@@ -120,7 +120,7 @@ describe("createIdempotentJob", () => {
       buildResponseBody: (jobId) => ({ jobId }),
     });
 
-    expect(() =>
+    await expect(
       createIdempotentJob({
         idempotencyKey: "idem-key-3",
         requestHash: "hash-3-different",
@@ -129,9 +129,9 @@ describe("createIdempotentJob", () => {
         publicKey: OWNER_PUBLIC_KEY,
         buildResponseBody: (jobId) => ({ jobId }),
       }),
-    ).toThrow(IdempotencyConflictError);
+    ).rejects.toThrow(IdempotencyConflictError);
 
-    expect(countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(1);
+    expect(await countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(1);
   });
 
   test("prunes expired idempotency key and allows key reuse", async () => {
@@ -141,7 +141,7 @@ describe("createIdempotentJob", () => {
 
     const { createIdempotentJob, countJobs } = await loadJobStore();
 
-    const first = createIdempotentJob({
+    const first = await createIdempotentJob({
       idempotencyKey: "idem-key-4",
       requestHash: "hash-4",
       payments,
@@ -153,7 +153,7 @@ describe("createIdempotentJob", () => {
     // TTL is 24h in the store; step just beyond it.
     vi.setSystemTime(new Date(start.getTime() + 24 * 60 * 60 * 1000 + 1));
 
-    const reused = createIdempotentJob({
+    const reused = await createIdempotentJob({
       idempotencyKey: "idem-key-4",
       requestHash: "hash-4-different-after-expiry",
       payments,
@@ -166,7 +166,7 @@ describe("createIdempotentJob", () => {
     expect(reused.replayed).toBe(false);
     expect(reused.jobId).not.toBe(first.jobId);
     expect(reused.responseBody).toEqual({ jobId: reused.jobId, version: "second" });
-    expect(countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(2);
+    expect(await countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(2);
   });
 
   test("serializes concurrent identical calls to one job record", async () => {
@@ -203,6 +203,6 @@ describe("createIdempotentJob", () => {
     expect(a.jobId).toBe(b.jobId);
     expect([a.replayed, b.replayed].sort()).toEqual([false, true]);
     expect(buildResponseBody).toHaveBeenCalledTimes(1);
-    expect(countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(1);
+    expect(await countJobs({ publicKey: OWNER_PUBLIC_KEY })).toBe(1);
   });
 });

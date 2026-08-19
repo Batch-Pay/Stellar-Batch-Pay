@@ -45,3 +45,9 @@ contract_id*.txt
 # SQLite data directory
 /data/
 data/*.db
+
+# Rust contract test outputs
+contracts/batch-vesting/cargo_test_err.txt
+contracts/batch-vesting/test_output.txt
+contracts/batch-vesting/test_output_utf8.txt
+

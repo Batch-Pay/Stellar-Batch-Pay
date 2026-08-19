@@ -2396,8 +2396,8 @@ fn test_upgrade_flow() {
 fn test_execute_upgrade_timelock_panic() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract_id, client) = register_contract_with_admin(&env, &Address::generate(&env));
     let admin = Address::generate(&env);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3179,10 +3179,8 @@ fn test_zero_fees_with_whitelisted_asset() {
 fn test_set_config_rejects_zero_upgrade_timelock() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     // upgrade_timelock = 0 is below MIN_UPGRADE_TIMELOCK → must panic with #20
     client.set_config(&admin, &Config {
         max_batch_size: 100,
@@ -3198,10 +3196,8 @@ fn test_set_config_rejects_zero_upgrade_timelock() {
 fn test_set_config_rejects_timelock_below_minimum() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     // One second below MIN_UPGRADE_TIMELOCK (1 day) → must panic with #20
     client.set_config(&admin, &Config {
         max_batch_size: 100,
@@ -3216,10 +3212,8 @@ fn test_set_config_rejects_timelock_below_minimum() {
 fn test_set_config_accepts_minimum_upgrade_timelock() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     // Exactly MIN_UPGRADE_TIMELOCK should succeed
     client.set_config(&admin, &Config {
         max_batch_size: 100,
@@ -3235,10 +3229,8 @@ fn test_set_config_accepts_minimum_upgrade_timelock() {
 fn test_execute_upgrade_blocked_with_minimum_timelock() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3269,10 +3261,8 @@ fn test_execute_upgrade_blocked_with_minimum_timelock() {
 fn test_set_config_with_zero_timelock_is_rejected_before_propose() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
 
     // Attempt to set timelock to 0 — should be rejected
     let result = client.try_set_config(&admin, &Config {

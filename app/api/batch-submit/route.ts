@@ -92,11 +92,11 @@ function isStrandedJob(job: JobState | undefined): boolean {
  * On idempotent replay, resume processing when the original job is stranded.
  * Returns true when the worker was re-invoked.
  */
-function resumeStrandedReplay(
+async function resumeStrandedReplay(
   jobId: string,
   restartWorker: () => void,
-): boolean {
-  const job = getJob(jobId);
+): Promise<boolean> {
+  const job = await getJob(jobId);
 
   if (!isStrandedJob(job)) return false;
 
@@ -119,7 +119,7 @@ function buildIdempotencyKey(body: RequestBody, headerKey: string | null): { ide
 }
 
 export async function POST(request: NextRequest) {
-  const rate = applyRateLimit(request, "batch-submit");
+  const rate = await applyRateLimit(request, "batch-submit");
   if (rate.blocked) return rate.response!;
 
   const requestId = request.headers.get("x-request-id");
@@ -238,7 +238,7 @@ export async function POST(request: NextRequest) {
       // shows real recipient addresses and retry/export flows have metadata.
       const storedPayments = payments ?? [];
 
-      const outcome = createIdempotentJob<BatchSubmitAcceptedResponse>({
+      const outcome = await createIdempotentJob<BatchSubmitAcceptedResponse>({
         idempotencyKey,
         requestHash,
         payments: storedPayments,
@@ -258,7 +258,7 @@ export async function POST(request: NextRequest) {
       });
 
       if (outcome.replayed) {
-        const workerRestarted = resumeStrandedReplay(outcome.jobId, () => {
+        const workerRestarted = await resumeStrandedReplay(outcome.jobId, () => {
           void processJobInBackground(outcome.jobId, storedPayments, network, undefined, signedTransactions, requestId || undefined);
         });
         logger.info({ requestId, jobId: outcome.jobId, publicKey, network, replayed: true, workerRestarted }, "Batch submit job replayed (pre-signed mode)");
@@ -378,7 +378,7 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    const outcome = createIdempotentJob<BatchSubmitAcceptedResponse>({
+    const outcome = await createIdempotentJob<BatchSubmitAcceptedResponse>({
       idempotencyKey,
       requestHash,
       payments,
@@ -396,7 +396,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (outcome.replayed) {
-      const workerRestarted = resumeStrandedReplay(outcome.jobId, () => {
+      const workerRestarted = await resumeStrandedReplay(outcome.jobId, () => {
         void processJobInBackground(outcome.jobId, payments, network, secretKey, undefined, requestId || undefined);
       });
       logger.info({ requestId, jobId: outcome.jobId, publicKey, network, replayed: true, workerRestarted }, "Batch submit job replayed (server-signed mode)");

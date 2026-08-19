@@ -18,7 +18,7 @@ interface RouteParams {
 }
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
-  const rate = applyRateLimit(request, "batch-status");
+  const rate = await applyRateLimit(request, "batch-status");
   if (rate.blocked) return rate.response!;
 
   const { jobId } = await params;
@@ -44,7 +44,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     );
   }
 
-  const job = getJob(jobId, publicKey);
+  const job = await getJob(jobId, publicKey);
 
   if (!job) {
     return setRateLimitHeaders(

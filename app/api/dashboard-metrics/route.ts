@@ -30,7 +30,7 @@ function rangeToDays(range: TimeRange | null): number | null {
 }
 
 export async function GET(request: NextRequest) {
-  const rateLimit = applyRateLimit(request, "dashboard-metrics");
+  const rateLimit = await applyRateLimit(request, "dashboard-metrics");
   if (rateLimit.blocked) return rateLimit.response!;
 
   const { searchParams } = request.nextUrl;

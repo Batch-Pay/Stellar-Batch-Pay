@@ -61,14 +61,14 @@ export async function GET(request: NextRequest) {
   try {
     const filters = { status, network, publicKey, search, from, to, sort: sort ?? undefined, order: order ?? undefined };
 
-    const [jobs, total] = [
+    const [jobs, total] = await Promise.all([
       getAllJobs({ limit, offset, ...filters }),
       countJobs(filters),
-    ];
+    ]);
 
     const summary = includeSummary
-      ? (() => {
-          const stats = getBatchHistorySummary(filters);
+      ? await (async () => {
+          const stats = await getBatchHistorySummary(filters);
           return {
             totalJobs: stats.totalJobs,
             totalPayments: stats.totalPayments,

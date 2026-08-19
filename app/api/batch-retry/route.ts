@@ -24,6 +24,7 @@ import { safeJsonResponse } from "@/lib/safe-json";
 import { logger } from "@/lib/logger";
 import { createHash } from "crypto";
 import { validateServerSigningAuth } from "@/lib/server-signing-auth";
+import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
 
 /**
  * Derive the public key from a secret and return it, or return null if the
@@ -46,7 +47,7 @@ function hashRequestBody(body: { jobId: string; publicKey: string }): string {
 }
 
 export async function POST(request: NextRequest) {
-  const requestId = request.headers.get("x-request-id");
+  const requestId = getRequestId(request);
   // Declared here so the catch block can reference it for logging (#515).
   let jobId: string | undefined;
 
@@ -343,18 +344,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error: "Idempotency key already exists for a different request body",
+          code: "CONFLICT",
+          requestId,
         },
         { status: 409 },
       );
     }
 
-    logger.error({ requestId }, "Batch retry error", error);
-    return safeJsonResponse(
-      {
-        error:
-          error instanceof Error ? error.message : "Failed to create retry job",
-      },
-      { status: 500 },
-    );
+    return sanitizedErrorResponse(error, {
+      requestId,
+      status: 500,
+      logMessage: "Batch retry error",
+      context: { jobId },
+    });
   }
 }

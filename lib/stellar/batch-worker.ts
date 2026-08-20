@@ -134,9 +134,33 @@ export async function processJobInBackground(
         if (job.publicKey) {
           const source = getXdrSourceAccount(xdr, network);
           if (source !== undefined && source !== job.publicKey) {
-            throw new Error(
-              `Transaction source account ${source} does not match job publicKey ${job.publicKey}`,
-            );
+            const mismatchError = `Transaction source account ${source} does not match job publicKey ${job.publicKey}`;
+            if (batchPayments.length > 0) {
+              for (const payment of batchPayments) {
+                allResults.push({
+                  recipient: payment.address,
+                  amount: payment.amount,
+                  asset: payment.asset,
+                  status: "failed",
+                  transactionHash: undefined,
+                  error: mismatchError,
+                });
+              }
+            } else {
+              for (let j = 0; j < recipientCount; j++) {
+                allResults.push({
+                  recipient: `tx-${i}-op-${j}`,
+                  amount: "0",
+                  asset: "XLM",
+                  status: "failed",
+                  transactionHash: undefined,
+                  error: mismatchError,
+                });
+              }
+            }
+            failCount += recipientCount;
+            incrementCompletedBatches(jobId);
+            continue;
           }
         }
 

@@ -12,6 +12,10 @@
  * All tests use vitest globals (describe / it / expect / vi / beforeEach).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  determineMaintenanceState,
+  getNextPageCursor,
+} from "../scripts/keeper";
 
 // ── readU32Env ───────────────────────────────────────────────────────────────
 // Extracted replica of the function in keeper.ts (pure, no side effects).
@@ -33,6 +37,20 @@ function readU32Env(
   }
   return value;
 }
+
+describe("keeper pagination and maintenance state", () => {
+  it("uses the RPC paging cursor, not the latest ledger, for continued event scans", () => {
+    expect(getNextPageCursor({ cursor: "abc123", latestLedger: 999 })).toBe("abc123");
+    expect(getNextPageCursor({ latestLedger: 999 })).toBeUndefined();
+  });
+
+  it("keeps the maintenance index for pending transactions instead of advancing it", () => {
+    expect(determineMaintenanceState("bumped")).toBe("advance");
+    expect(determineMaintenanceState("no-work")).toBe("reset");
+    expect(determineMaintenanceState("pending")).toBe("hold");
+    expect(determineMaintenanceState("failed")).toBe("hold");
+  });
+});
 
 describe("readU32Env", () => {
   it("returns the parsed integer when the env var is set", () => {

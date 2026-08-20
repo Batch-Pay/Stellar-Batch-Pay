@@ -21,6 +21,7 @@ import { StrKey } from "stellar-sdk";
 import { getAllJobs, countJobs, getBatchHistorySummary } from "@/lib/job-store";
 import { safeJsonResponse } from "@/lib/safe-json";
 import type { JobStatus, BatchJobNetwork } from "@/lib/stellar/types";
+import { requireWalletAuth } from "@/lib/wallet-auth";
 
 function parseIsoTimestamp(value: string | null): string | undefined {
   if (!value) return undefined;
@@ -50,6 +51,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       { error: "A valid publicKey query parameter is required" },
       { status: 400 },
+    );
+  }
+
+  const auth = requireWalletAuth(request, publicKey);
+  if (!auth.valid) {
+    return NextResponse.json(
+      { error: auth.error },
+      { status: auth.status ?? 401 },
     );
   }
 

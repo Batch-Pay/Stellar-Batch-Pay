@@ -9,6 +9,8 @@ import { batchHistoryKeys, dashboardMetricsKeys } from "@/lib/query-keys";
 import { parsePaymentFile, analyzeParsedPayments } from "@/lib/stellar/parser";
 import { getBatchSummary } from "@/lib/stellar/summary";
 import { canonicalizeIdempotencyPayload } from "@/lib/idempotency";
+import { authenticatedFetch } from "@/lib/wallet-session-client";
+import { useOptionalWalletSession } from "@/contexts/WalletSessionContext";
 import { isSubmissionBlocked } from "@/lib/stellar/job-lifecycle";
 import type {
   ParsedPaymentFile,
@@ -137,6 +139,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
   const pollErrorCountRef = useRef(0);
   const queryClient = useQueryClient();
   const { publicKey, expectedNetwork, selectNetwork } = useWallet();
+  const walletSession = useOptionalWalletSession();
   const { pushBatchNotification } = useNotifications();
 
   const network = expectedNetwork === "mainnet" ? "mainnet" : "testnet";
@@ -214,9 +217,10 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
         try {
           abortControllerRef.current = new AbortController();
           const params = new URLSearchParams({ publicKey: ownerPublicKey });
-          const res = await fetch(
+          const res = await authenticatedFetch(
             `/api/batch-status/${id}?${params.toString()}`,
-            { signal: abortControllerRef.current.signal }
+            ownerPublicKey,
+            { signal: abortControllerRef.current.signal },
           );
           if (!res.ok) {
             throw new Error(`HTTP error ${res.status}`);
@@ -461,6 +465,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
       setJobStatus("queued");
       setCompletedBatches(0);
       setTotalBatches(0);
+      await walletSession?.ensureSession();
       startPolling(data.jobId, publicKey);
     } catch (error) {
       console.error("Batch submission error:", error);

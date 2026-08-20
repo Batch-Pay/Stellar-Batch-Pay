@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import type { JobStatus, BatchResult } from "@/lib/stellar/types";
+import { authenticatedFetch } from "@/lib/wallet-session-client";
 
 export interface JobState {
   status: JobStatus;
@@ -18,13 +19,19 @@ function isTerminal(status: JobStatus) {
 }
 
 // SSE-based live updates with automatic polling fallback.
-export function useBatchPolling(jobId: string | null, publicKey: string | null) {
+// Requires an authenticated wallet session (HttpOnly cookie + bearer token)
+// before connecting; pass sessionReady=true once ensureSession() resolves.
+export function useBatchPolling(
+  jobId: string | null,
+  publicKey: string | null,
+  sessionReady = false,
+) {
   const [jobState, setJobState] = useState<JobState | null>(null);
   const [isPolling, setIsPolling] = useState(false);
   const cleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    if (!jobId || !publicKey) {
+    if (!jobId || !publicKey || !sessionReady) {
       setJobState(null);
       setIsPolling(false);
       return;
@@ -33,8 +40,7 @@ export function useBatchPolling(jobId: string | null, publicKey: string | null) 
     setIsPolling(true);
     let active = true;
 
-    // Try SSE first. If EventSource is unavailable or the connection errors
-    // immediately, fall back to the exponential-backoff polling path.
+    // Try SSE first. EventSource sends same-origin cookies set by /api/auth/verify.
     if (typeof EventSource !== "undefined") {
       const params = new URLSearchParams({ publicKey });
       const es = new EventSource(`/api/batch-events/${jobId}?${params.toString()}`);
@@ -68,10 +74,8 @@ export function useBatchPolling(jobId: string | null, publicKey: string | null) 
         if (!active) return;
 
         if (!sseEstablished) {
-          // SSE never connected — fall back to polling immediately.
           startPolling();
         } else {
-          // Connection dropped after being established — treat as done.
           setIsPolling(false);
         }
       };
@@ -87,7 +91,6 @@ export function useBatchPolling(jobId: string | null, publicKey: string | null) 
       };
     }
 
-    // Polling fallback (also used when EventSource is unavailable).
     startPolling();
     return () => {
       active = false;
@@ -103,7 +106,10 @@ export function useBatchPolling(jobId: string | null, publicKey: string | null) 
         if (!active) return;
         try {
           const params = new URLSearchParams({ publicKey: publicKey! });
-          const response = await fetch(`/api/batch-status/${jobId}?${params.toString()}`);
+          const response = await authenticatedFetch(
+            `/api/batch-status/${jobId}?${params.toString()}`,
+            publicKey,
+          );
           if (!response.ok) throw new Error("Failed to fetch job status");
 
           const data = (await response.json()) as JobState;
@@ -128,7 +134,7 @@ export function useBatchPolling(jobId: string | null, publicKey: string | null) 
 
       cleanupRef.current = () => clearTimeout(timeoutId);
     }
-  }, [jobId, publicKey]);
+  }, [jobId, publicKey, sessionReady]);
 
   return { jobState, isPolling };
 }

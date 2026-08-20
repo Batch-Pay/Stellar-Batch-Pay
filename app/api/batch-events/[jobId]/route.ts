@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { StrKey } from "stellar-sdk";
 import { getJob } from "@/lib/job-store";
 import { applyRateLimit } from "@/lib/api-rate-limit";
+import { requireWalletAuth } from "@/lib/wallet-auth";
 
 interface RouteParams {
   params: Promise<{ jobId: string }>;
@@ -55,6 +56,19 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       JSON.stringify({ error: "A valid publicKey query parameter is required" }),
       { status: 400, headers: { "Content-Type": "application/json", "X-RateLimit-Remaining": String(rate.remaining), "X-RateLimit-Limit": String(rate.limit), "X-RateLimit-Reset": String(rate.resetAt) } },
     );
+  }
+
+  const auth = requireWalletAuth(request, publicKey);
+  if (!auth.valid) {
+    return new Response(JSON.stringify({ error: auth.error }), {
+      status: auth.status ?? 401,
+      headers: {
+        "Content-Type": "application/json",
+        "X-RateLimit-Remaining": String(rate.remaining),
+        "X-RateLimit-Limit": String(rate.limit),
+        "X-RateLimit-Reset": String(rate.resetAt),
+      },
+    });
   }
 
   const encoder = new TextEncoder();

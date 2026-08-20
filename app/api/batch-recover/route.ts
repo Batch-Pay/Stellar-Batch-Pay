@@ -9,8 +9,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { StrKey } from "stellar-sdk";
 import { getJob } from "@/lib/job-store";
 import { safeJsonResponse } from "@/lib/safe-json";
+import { requireWalletAuth } from "@/lib/wallet-auth";
 import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
 
 export async function GET(request: NextRequest) {
@@ -32,6 +34,21 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { error: "publicKey is required", code: "BAD_REQUEST", requestId },
         { status: 400 },
+      );
+    }
+
+    if (!StrKey.isValidEd25519PublicKey(publicKey)) {
+      return NextResponse.json(
+        { error: "A valid publicKey is required" },
+        { status: 400 },
+      );
+    }
+
+    const auth = requireWalletAuth(request, publicKey);
+    if (!auth.valid) {
+      return NextResponse.json(
+        { error: auth.error },
+        { status: auth.status ?? 401 },
       );
     }
 

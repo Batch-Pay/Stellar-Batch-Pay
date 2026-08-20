@@ -118,6 +118,32 @@ export SERVER_SIGNING_API_KEY="$(openssl rand -hex 32)"
 >
 > See DEVELOPMENT.md for local test setup using this flag.
 
+### `WALLET_AUTH_SECRET` — Wallet Session Authentication
+
+Batch read/recover routes (`/api/batch-status`, `/api/batch-history`,
+`/api/batch-recover`, `/api/batch-events`) require a short-lived wallet session
+token issued after the connected wallet signs a SEP-10-style challenge. Knowing
+a public G-address alone is no longer sufficient to read another user's payroll
+data.
+
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `WALLET_AUTH_SECRET` | dev fallback (non-production) | HMAC secret for session tokens |
+| `WALLET_AUTH_SERVER_SECRET` | derived from secret | SEP-10 challenge server signing key |
+| `WALLET_AUTH_HOME_DOMAIN` | hostname from `NEXT_PUBLIC_SITE_URL` | SEP-10 home domain |
+| `WALLET_AUTH_WEB_AUTH_DOMAIN` | `stellar-batch-pay` | SEP-10 web auth domain |
+| `WALLET_AUTH_SESSION_TTL_SEC` | `3600` | Session lifetime in seconds |
+
+Generate a production secret:
+
+```bash
+openssl rand -hex 32
+export WALLET_AUTH_SECRET="<output>"
+```
+
+See [docs/wallet-auth.md](./docs/wallet-auth.md) for the dashboard polling/SSE
+flow and API usage.
+
 ### Environment Variable Management
 
 **Do NOT commit `.env` files or secrets to version control.**

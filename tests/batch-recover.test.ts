@@ -7,14 +7,21 @@
  */
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { Keypair, Networks } from "stellar-sdk";
+import { NextRequest } from "next/server";
 
 process.env.JOB_STORE_PATH = ":memory:";
+process.env.WALLET_AUTH_SECRET = "test-wallet-auth-secret-recover";
+process.env.WALLET_AUTH_HOME_DOMAIN = "localhost";
+process.env.WALLET_AUTH_WEB_AUTH_DOMAIN = "stellar-batch-pay-recover-test";
+process.env.WALLET_AUTH_NETWORK_PASSPHRASE = Networks.TESTNET;
 
 import { createJob, updateJob } from "@/lib/job-store";
 import { GET } from "@/app/api/batch-recover/route";
+import { createTestWalletSession } from "@/lib/wallet-auth";
 import type { BatchResult } from "@/lib/stellar/types";
 
-const PUBLIC_KEY = "GDQERHRWJYV7JHRP5V7DWJVI6Y5ABZP3YRH7DKYJRBEGJQKE6IQEOSY2";
+let PUBLIC_KEY: string;
 
 const completedResult: BatchResult = {
   batchId: "test-batch",
@@ -30,16 +37,21 @@ const completedResult: BatchResult = {
   summary: { successful: 1, failed: 1 },
 };
 
-function makeRequest(params: Record<string, string>) {
+function makeRequest(params: Record<string, string>, publicKeyForAuth?: string) {
   const url = new URL("http://localhost/api/batch-recover");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  return new Request(url.toString());
+  const authKey = publicKeyForAuth ?? params.publicKey;
+  const headers: HeadersInit | undefined = authKey
+    ? { Authorization: `Bearer ${createTestWalletSession(authKey)}` }
+    : undefined;
+  return new NextRequest(url.toString(), { headers });
 }
 
 describe("GET /api/batch-recover", () => {
   let jobId: string;
 
   beforeEach(async () => {
+    PUBLIC_KEY = Keypair.random().publicKey();
     jobId = await createJob([], "testnet", PUBLIC_KEY);
     await updateJob(jobId, { status: "completed", result: completedResult });
   });
@@ -83,8 +95,18 @@ describe("GET /api/batch-recover", () => {
     expect(body.error).toMatch(/publicKey/i);
   });
 
+  test("returns 401 when publicKey is supplied without wallet authentication", async () => {
+    const url = new URL("http://localhost/api/batch-recover");
+    url.searchParams.set("jobId", jobId);
+    url.searchParams.set("publicKey", PUBLIC_KEY);
+    const res = await GET(new NextRequest(url.toString()) as never);
+
+    expect(res.status).toBe(401);
+  });
+
   test("returns 404 when publicKey does not match the job owner", async () => {
-    const res = await GET(makeRequest({ jobId, publicKey: "GCCC" }) as never);
+    const otherKey = Keypair.random().publicKey();
+    const res = await GET(makeRequest({ jobId, publicKey: otherKey }, otherKey) as never);
 
     expect(res.status).toBe(404);
   });
@@ -96,8 +118,8 @@ describe("GET /api/batch-recover", () => {
   });
 
   test("does not leak job data for a valid jobId with wrong publicKey (#538)", async () => {
-    const otherKey = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
-    const res = await GET(makeRequest({ jobId, publicKey: otherKey }) as never);
+    const otherKey = Keypair.random().publicKey();
+    const res = await GET(makeRequest({ jobId, publicKey: otherKey }, otherKey) as never);
     const body = await res.json();
 
     expect(res.status).toBe(404);
@@ -156,8 +178,11 @@ describe("GET /api/batch-recover — sanitized error responses (#748)", () => {
     const url = new URL("http://localhost/api/batch-recover");
     url.searchParams.set("jobId", "some-job");
     url.searchParams.set("publicKey", PUBLIC_KEY);
-    const req = new Request(url.toString(), {
-      headers: { "x-request-id": "trace-abc-123" },
+    const req = new NextRequest(url.toString(), {
+      headers: {
+        "x-request-id": "trace-abc-123",
+        Authorization: `Bearer ${createTestWalletSession(PUBLIC_KEY)}`,
+      },
     });
 
     const res = await GET(req as never);

@@ -76,14 +76,14 @@ describe("processJobInBackground — pre-signed source verification (#504)", () 
     // Job attributed to `owner`, but the envelope is signed by `attacker`.
     const signedTransactions = [buildSignedXdr(attacker)];
 
-    const jobId = createJob([], "testnet", owner, signedTransactions);
+    const jobId = await createJob([], "testnet", owner, signedTransactions);
 
     await processJobInBackground(jobId, [], "testnet", undefined, signedTransactions);
 
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     expect(job?.status).toBe("failed");
     expect(mockSubmitTransaction).not.toHaveBeenCalled();
-    expect(job?.result?.results[0]?.error).toMatch(/does not match job publicKey/i);
+    expect(job?.error).toMatch(/does not match job publicKey/i);
   });
 
   test("submits normally when the XDR source matches job.publicKey", async () => {
@@ -95,11 +95,11 @@ describe("processJobInBackground — pre-signed source verification (#504)", () 
     const owner = Keypair.random();
     const signedTransactions = [buildSignedXdr(owner)];
 
-    const jobId = createJob([], "testnet", owner.publicKey(), signedTransactions);
+    const jobId = await createJob([], "testnet", owner.publicKey(), signedTransactions);
 
     await processJobInBackground(jobId, [], "testnet", undefined, signedTransactions);
 
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     expect(job?.status).toBe("completed");
     expect(mockSubmitTransaction).toHaveBeenCalledTimes(1);
   });

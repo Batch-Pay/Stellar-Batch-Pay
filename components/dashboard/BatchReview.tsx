@@ -42,6 +42,7 @@ interface BatchReviewProps {
   onSkipToggle?: (index: number) => void;
   onConvertToggle?: (index: number) => void;
   onSubmit?: (filteredPayments: PaymentInstruction[]) => Promise<void>;
+  hasActiveJob?: boolean;
 }
 
 export function BatchReview(props: BatchReviewProps) {
@@ -54,10 +55,13 @@ export function BatchReview(props: BatchReviewProps) {
   const onSkipToggle = props.onSkipToggle ?? context.onSkipToggle;
   const onConvertToggle = props.onConvertToggle ?? context.onConvertToggle;
   const onSubmit = props.onSubmit ?? context.onSubmit;
+  // Reflects the job's full lifecycle (queued -> processing -> terminal), not
+  // just whether the initial /api/batch-submit request is in flight, so the
+  // button stays locked until the background job actually finishes (#698).
+  const isSubmitting = props.hasActiveJob ?? context.hasActiveJob;
   const { publicKey } = useWallet();
   const { balances, loading: balancesLoading } = useBalances();
   const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Determine unique assets in payments
@@ -153,19 +157,14 @@ export function BatchReview(props: BatchReviewProps) {
   );
 
   const handleSubmit = async () => {
-    if (!publicKey) {
+    if (!publicKey || isSubmitting) {
       return;
     }
     const filteredPayments = payments.filter(
       (_, idx) =>
         !skippedIndices.includes(idx) && !convertedIndices.includes(idx),
     );
-    setIsSubmitting(true);
-    try {
-      await onSubmit(filteredPayments);
-    } finally {
-      setIsSubmitting(false);
-    }
+    await onSubmit(filteredPayments);
   };
 
   // Debounced trustline refetch (300ms) when recipient list or asset changes

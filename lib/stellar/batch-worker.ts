@@ -41,13 +41,13 @@ export async function processJobInBackground(
   const MAX_OPS = 100;
 
   try {
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     if (!job) {
       logger.warn({ requestId, jobId }, "Background worker: Job not found");
       return;
     }
     // Atomically claim the job. If claim fails, it means another worker is actively processing it or it is finished.
-    const claimed = claimJobForProcessing(jobId);
+    const claimed = await claimJobForProcessing(jobId);
     if (!claimed) {
       logger.warn({ requestId, jobId, status: job.status }, "Background worker: Duplicate worker run detected. Job is already claimed, processing, or completed. Exiting early.");
       return;
@@ -75,7 +75,7 @@ export async function processJobInBackground(
 
     // #300: Handle pre-signed transactions (client-side signing)
     if (xdrs && xdrs.length > 0) {
-      updateJob(jobId, {
+      await updateJob(jobId, {
         status: "processing",
         totalBatches: xdrs.length,
         completedBatches: 0,
@@ -112,7 +112,7 @@ export async function processJobInBackground(
             status: "failed",
             error: error instanceof Error ? error.message : "Unparseable transaction XDR",
           });
-          incrementCompletedBatches(jobId);
+          await incrementCompletedBatches(jobId);
           continue;
         }
 
@@ -265,7 +265,7 @@ export async function processJobInBackground(
           }
         }
 
-        incrementCompletedBatches(jobId);
+        await incrementCompletedBatches(jobId);
       }
 
       const finalStatus = successCount > 0 ? "completed" : "failed";
@@ -286,7 +286,7 @@ export async function processJobInBackground(
         },
       };
 
-      updateJob(jobId, {
+      await updateJob(jobId, {
         status: finalStatus,
         result: finalResult,
       });
@@ -319,7 +319,7 @@ export async function processJobInBackground(
     // Compute batches up-front so we know totalBatches immediately
     const batches = await createBatches(payments, MAX_OPS, { network, server });
 
-    updateJob(jobId, {
+    await updateJob(jobId, {
       status: "processing",
       totalBatches: batches.length,
       completedBatches: 0,
@@ -373,7 +373,7 @@ export async function processJobInBackground(
       }
 
       // Update progress after each batch completes
-      incrementCompletedBatches(jobId);
+      await incrementCompletedBatches(jobId);
     }
 
     const totalAmount = formatStellarAmount(sumStellarAmounts(payments.map(p => p.amount)));
@@ -394,7 +394,7 @@ export async function processJobInBackground(
     };
 
     const finalStatus = successCount > 0 ? "completed" : "failed";
-    updateJob(jobId, {
+    await updateJob(jobId, {
       status: finalStatus,
       result: finalResult,
     });
@@ -418,7 +418,7 @@ export async function processJobInBackground(
     }
   } catch (error) {
     logger.error({ requestId, jobId }, "Background worker encountered error", error);
-    updateJob(jobId, {
+    await updateJob(jobId, {
       status: "failed",
       error: error instanceof Error ? error.message : "Unknown worker error",
     });

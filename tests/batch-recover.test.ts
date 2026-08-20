@@ -6,7 +6,7 @@
  * publicKey is now required and job lookup is always ownership-scoped.
  */
 
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 process.env.JOB_STORE_PATH = ":memory:";
 
@@ -39,9 +39,9 @@ function makeRequest(params: Record<string, string>) {
 describe("GET /api/batch-recover", () => {
   let jobId: string;
 
-  beforeEach(() => {
-    jobId = createJob([], "testnet", PUBLIC_KEY);
-    updateJob(jobId, { status: "completed", result: completedResult });
+  beforeEach(async () => {
+    jobId = await createJob([], "testnet", PUBLIC_KEY);
+    await updateJob(jobId, { status: "completed", result: completedResult });
   });
 
   test("returns 200 with recovery data for a completed SQLite job", async () => {
@@ -103,5 +103,69 @@ describe("GET /api/batch-recover", () => {
     expect(res.status).toBe(404);
     expect(body).not.toHaveProperty("successfulTransactions");
     expect(body).not.toHaveProperty("failedTransactions");
+  });
+
+  test("includes a requestId on the 404 not-found response", async () => {
+    const res = await GET(
+      makeRequest({ jobId: "does-not-exist", publicKey: PUBLIC_KEY }) as never,
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(typeof body.requestId).toBe("string");
+    expect(body.requestId.length).toBeGreaterThan(0);
+  });
+});
+
+describe("GET /api/batch-recover — sanitized error responses (#748)", () => {
+  test("forced throw returns a sanitized body with no leaked internals", async () => {
+    const sensitiveMessage =
+      "ENOENT: no such file or directory, open '/var/data/batch-pay.sqlite'";
+    const jobStore = await import("@/lib/job-store");
+    const getJobSpy = vi
+      .spyOn(jobStore, "getJob")
+      .mockRejectedValueOnce(new Error(sensitiveMessage));
+
+    const res = await GET(
+      makeRequest({ jobId: "some-job", publicKey: PUBLIC_KEY }) as never,
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.success).toBe(false);
+    expect(body.code).toBe("INTERNAL_ERROR");
+    expect(typeof body.requestId).toBe("string");
+    expect(body.requestId.length).toBeGreaterThan(0);
+
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("ENOENT");
+    expect(raw).not.toContain("/var/data");
+    expect(raw).not.toContain("batch-pay.sqlite");
+    expect(raw).not.toContain(".ts:");
+    expect(body).not.toHaveProperty("stack");
+
+    getJobSpy.mockRestore();
+  });
+
+  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
+    const jobStore = await import("@/lib/job-store");
+    const getJobSpy = vi
+      .spyOn(jobStore, "getJob")
+      .mockRejectedValueOnce(new Error("boom"));
+
+    const url = new URL("http://localhost/api/batch-recover");
+    url.searchParams.set("jobId", "some-job");
+    url.searchParams.set("publicKey", PUBLIC_KEY);
+    const req = new Request(url.toString(), {
+      headers: { "x-request-id": "trace-abc-123" },
+    });
+
+    const res = await GET(req as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.requestId).toBe("trace-abc-123");
+
+    getJobSpy.mockRestore();
   });
 });

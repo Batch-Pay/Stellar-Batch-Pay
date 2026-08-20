@@ -51,22 +51,27 @@ fn matching_memos(env: &Env, len: u32) -> Vec<String> {
     memos
 }
 
-fn setup_contract(env: &Env, client: &BatchVestingContractClient) {
+fn register_contract_with_admin<'a>(env: &Env, admin: &Address) -> (Address, BatchVestingContractClient<'a>) {
+    let contract_id = env.register(BatchVestingContract, BatchVestingContractArgs::__constructor(admin));
+    (contract_id.clone(), BatchVestingContractClient::new(env, &contract_id))
+}
+
+fn setup_contract(env: &Env) -> (Address, BatchVestingContractClient) {
     let admin = Address::generate(env);
-    client.set_admin(&admin);
+    let (contract_id, client) = register_contract_with_admin(env, &admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
         upgrade_timelock: 7 * 24 * 60 * 60,
         fee_asset: Address::generate(env),
     });
+    (contract_id, client)
 }
 
 #[test]
 fn test_version() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
+    let (contract_id, client) = register_contract_with_admin(&env, &Address::generate(&env));
     assert_eq!(client.version(), String::from_str(&env, "1.1.0"));
 }
 
@@ -75,9 +80,7 @@ fn test_deposit_and_claim() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -129,9 +132,7 @@ fn test_revoke_by_sender() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -176,9 +177,7 @@ fn test_claim_after_revoke_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -220,18 +219,17 @@ fn test_revoke_by_admin_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
+    let (contract_id, client) = register_contract_with_admin(&env, &Address::generate(&env));
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
 
     let token_admin = Address::generate(&env);
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&sender, &1000);
 
-    client.set_admin(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -274,9 +272,7 @@ fn test_revoke_unauthorized() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -319,9 +315,7 @@ fn test_revoke_already_vested() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -364,9 +358,7 @@ fn test_claim_too_early() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -409,8 +401,7 @@ fn test_claim_too_early() {
 fn test_claim_unauthorized() {
     let env = Env::default();
     // NOT calling env.mock_all_auths() here
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
+    let (contract_id, client) = register_contract_with_admin(&env, &Address::generate(&env));
 
     let recipient = Address::generate(&env);
     let _token = Address::generate(&env);
@@ -423,8 +414,7 @@ fn test_claim_unauthorized() {
 fn test_claim_no_vesting() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
+    let (contract_id, client) = register_contract_with_admin(&env, &Address::generate(&env));
 
     let recipient = Address::generate(&env);
     let _token = Address::generate(&env);
@@ -437,8 +427,7 @@ fn test_claim_no_vesting() {
 fn test_deposit_unauthorized() {
     let env = Env::default();
     // NOT calling env.mock_all_auths() here
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
+    let (contract_id, client) = register_contract_with_admin(&env, &Address::generate(&env));
 
     let sender = Address::generate(&env);
     let token_admin = Address::generate(&env); let (token_client, _) = create_token_contract(&env, &token_admin); let token = token_client.address;
@@ -467,9 +456,7 @@ fn test_deposit_rejects_oversized_batch() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let token_admin = Address::generate(&env);
@@ -504,9 +491,7 @@ fn test_events_emission() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -619,9 +604,7 @@ fn test_multiple_vestings_different_unlocks() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -692,9 +675,7 @@ fn test_batch_revoke_by_sender() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -761,19 +742,18 @@ fn test_batch_revoke_by_admin_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
+    let (contract_id, client) = register_contract_with_admin(&env, &Address::generate(&env));
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
     let recipient2 = Address::generate(&env);
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
 
     let token_admin = Address::generate(&env);
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&sender, &1000);
 
-    client.set_admin(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -831,14 +811,14 @@ fn test_batch_revoke_multiple_senders_fails_for_admin() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
+    let (contract_id, client) = register_contract_with_admin(&env, &Address::generate(&env));
 
     let sender1 = Address::generate(&env);
     let sender2 = Address::generate(&env);
     let recipient1 = Address::generate(&env);
     let recipient2 = Address::generate(&env);
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
 
     let token_admin = Address::generate(&env);
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
@@ -846,7 +826,6 @@ fn test_batch_revoke_multiple_senders_fails_for_admin() {
     token_admin_client.mint(&sender1, &1000);
     token_admin_client.mint(&sender2, &1000);
 
-    client.set_admin(&admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -924,9 +903,7 @@ fn test_batch_revoke_unauthorized() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -995,9 +972,7 @@ fn test_batch_revoke_already_vested() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -1065,9 +1040,7 @@ fn test_batch_revoke_no_vesting() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -1109,9 +1082,7 @@ fn test_batch_revoke_events_emission() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -1199,9 +1170,7 @@ fn test_batch_revoke_partial_recipients() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -1269,9 +1238,7 @@ fn test_batch_revoke_rejects_oversized_batch() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let token_admin = Address::generate(&env);
@@ -1295,9 +1262,7 @@ fn test_batch_revoke_partial_success() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let attacker = Address::generate(&env);
@@ -1419,9 +1384,7 @@ fn test_batch_revoke_mixed_valid_and_invalid() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient_valid1 = Address::generate(&env);
@@ -1497,6 +1460,22 @@ fn test_batch_revoke_mixed_valid_and_invalid() {
     assert_eq!(token.balance(&contract_id), 0);
 }
 
+// ─── Issue #695: Constructor-based admin initialization ───────────────────
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #6)")]
+fn test_constructor_initializes_admin_and_blocks_late_takeover() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
+    let attacker = Address::generate(&env);
+
+    // A later set_admin call must not be able to seize admin rights.
+    client.set_admin(&attacker);
+}
+
 // ─── Issue #195: Admin re-claim after renouncement ───────────────────────────
 
 /// After renounce_admin, set_admin must be permanently blocked so no one can
@@ -1507,14 +1486,11 @@ fn test_set_admin_after_renounce_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
     let attacker = Address::generate(&env);
 
     // Legitimate first-time admin initialisation
-    client.set_admin(&admin);
 
     // Admin renounces ownership
     client.renounce_admin(&admin);
@@ -1532,13 +1508,9 @@ fn test_set_admin_twice_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin1 = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin1);
     let admin2 = Address::generate(&env);
-
-    client.set_admin(&admin1);
     // Second call must fail with AdminAlreadySet (#6)
     client.set_admin(&admin2);
 }
@@ -1551,9 +1523,7 @@ fn test_claim_multi_token() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -1614,9 +1584,7 @@ fn test_deposit_schedule_limit_exceeded() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -1670,9 +1638,7 @@ fn test_batch_revoke_multiple_schedules_same_recipient() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -1775,8 +1741,7 @@ fn test_lazy_migration() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
+    let (contract_id, client) = register_contract_with_admin(&env, &Address::generate(&env));
 
     let recipient = Address::generate(&env);
     let sender = Address::generate(&env);
@@ -1848,9 +1813,7 @@ fn test_get_vestings_pagination() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -1923,9 +1886,7 @@ fn test_deposit_event_includes_token_address() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -1963,9 +1924,7 @@ fn test_claim_event_includes_token_address() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2001,9 +1960,7 @@ fn test_revoke_event_includes_token_address() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2041,9 +1998,7 @@ fn test_deposit_overflow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -2078,9 +2033,7 @@ fn test_get_vestings_pagination_overflow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2115,9 +2068,7 @@ fn test_ttl_bumping() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2153,11 +2104,8 @@ fn test_set_config() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
 
     let fee_token = Address::generate(&env);
     let new_config = Config {
@@ -2188,11 +2136,8 @@ fn test_config_enforcement() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
 
     client.set_config(&admin, &Config {
         max_batch_size: 2,
@@ -2225,13 +2170,9 @@ fn test_propose_and_accept_admin() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
     let new_admin = Address::generate(&env);
-
-    client.set_admin(&admin);
 
     // Step 1: Propose
     client.propose_admin(&admin, &new_admin);
@@ -2256,14 +2197,10 @@ fn test_only_pending_admin_can_accept() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
     let new_admin = Address::generate(&env);
     let attacker = Address::generate(&env);
-
-    client.set_admin(&admin);
     client.propose_admin(&admin, &new_admin);
 
     // Attacker tries to accept — must fail with Unauthorized (#9)
@@ -2281,9 +2218,7 @@ fn test_batch_revoke_out_of_order_indices() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2340,9 +2275,7 @@ fn test_step_based_vesting() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2401,9 +2334,7 @@ fn test_invalid_vesting_step_divisibility() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipients = Vec::from_array(&env, [Address::generate(&env)]);
@@ -2427,11 +2358,8 @@ fn test_upgrade_flow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -2468,10 +2396,8 @@ fn test_upgrade_flow() {
 fn test_execute_upgrade_timelock_panic() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -2492,9 +2418,7 @@ fn test_partial_claim_keeps_schedule_active() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2538,9 +2462,7 @@ fn test_partial_claim_capped_at_claimable() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2574,9 +2496,7 @@ fn test_partial_claim_before_unlock_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2607,9 +2527,7 @@ fn test_partial_claim_zero_amount_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2643,9 +2561,7 @@ fn test_claim_all_checked_add_no_overflow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2684,9 +2600,7 @@ fn test_calculate_vested_amount_max_i128_no_overflow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender    = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2732,9 +2646,7 @@ fn test_calculate_vested_amount_overflow_returns_error() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender    = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2777,9 +2689,7 @@ fn test_batch_revoke_unsorted_input_rejected() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender    = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2819,9 +2729,7 @@ fn test_batch_revoke_sorted_input_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender    = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2867,9 +2775,7 @@ fn test_batch_revoke_different_recipients_any_order() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender     = Address::generate(&env);
     let recipient1 = Address::generate(&env);
@@ -2918,9 +2824,7 @@ fn test_batch_revoke_interleaved_indices() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender    = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -2977,9 +2881,7 @@ fn test_batch_revoke_interleaved_descending_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-    setup_contract(&env, &client);
+    let (contract_id, client) = setup_contract(&env);
 
     let sender    = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -3038,10 +2940,8 @@ fn test_set_fee_config_uses_whitelisted_asset_from_config() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
     let treasury = Address::generate(&env);
@@ -3050,10 +2950,7 @@ fn test_set_fee_config_uses_whitelisted_asset_from_config() {
     let (token_a, token_admin_a) = create_token_contract(&env, &Address::generate(&env));
     let (token_b, token_admin_b) = create_token_contract(&env, &Address::generate(&env));
 
-    // Set admin
-    client.set_admin(&admin);
-
-    // Initialize config with token_a as the whitelisted fee asset
+    // Initialize admin and config with token_a as the whitelisted fee asset
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3097,18 +2994,15 @@ fn test_deposit_fails_without_whitelisted_fee_asset() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
 
     let (token_a, token_admin_a) = create_token_contract(&env, &Address::generate(&env));
     let (token_b, token_admin_b) = create_token_contract(&env, &Address::generate(&env));
 
-    // Set admin and config with token_a as fee asset
-    client.set_admin(&admin);
+    // Initialize admin and config with token_a as fee asset
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3147,10 +3041,8 @@ fn test_fees_collected_in_whitelisted_asset_not_deposit_token() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
     let treasury = Address::generate(&env);
@@ -3158,8 +3050,7 @@ fn test_fees_collected_in_whitelisted_asset_not_deposit_token() {
     let (token_xlm, token_admin_xlm) = create_token_contract(&env, &Address::generate(&env));
     let (token_usdc, token_admin_usdc) = create_token_contract(&env, &Address::generate(&env));
 
-    // Set admin and config with XLM as fee asset
-    client.set_admin(&admin);
+    // Initialize admin and config with XLM as fee asset
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3203,15 +3094,12 @@ fn test_fee_config_event_includes_whitelisted_asset() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
     let (token_xlm, _) = create_token_contract(&env, &Address::generate(&env));
     let treasury = Address::generate(&env);
 
-    // Set admin and config
-    client.set_admin(&admin);
+    // Initialize admin and config
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3242,17 +3130,14 @@ fn test_zero_fees_with_whitelisted_asset() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
+    let (contract_id, client) = register_contract_with_admin(&env, &admin);
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
 
     let (token, token_admin) = create_token_contract(&env, &Address::generate(&env));
 
-    // Set admin and config
-    client.set_admin(&admin);
+    // Initialize admin and config
     let config = Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3294,10 +3179,8 @@ fn test_zero_fees_with_whitelisted_asset() {
 fn test_set_config_rejects_zero_upgrade_timelock() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     // upgrade_timelock = 0 is below MIN_UPGRADE_TIMELOCK → must panic with #20
     client.set_config(&admin, &Config {
         max_batch_size: 100,
@@ -3313,10 +3196,8 @@ fn test_set_config_rejects_zero_upgrade_timelock() {
 fn test_set_config_rejects_timelock_below_minimum() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     // One second below MIN_UPGRADE_TIMELOCK (1 day) → must panic with #20
     client.set_config(&admin, &Config {
         max_batch_size: 100,
@@ -3331,10 +3212,8 @@ fn test_set_config_rejects_timelock_below_minimum() {
 fn test_set_config_accepts_minimum_upgrade_timelock() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     // Exactly MIN_UPGRADE_TIMELOCK should succeed
     client.set_config(&admin, &Config {
         max_batch_size: 100,
@@ -3350,10 +3229,8 @@ fn test_set_config_accepts_minimum_upgrade_timelock() {
 fn test_execute_upgrade_blocked_with_minimum_timelock() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
     client.set_config(&admin, &Config {
         max_batch_size: 100,
         max_schedules_per_recipient: 10,
@@ -3384,10 +3261,8 @@ fn test_execute_upgrade_blocked_with_minimum_timelock() {
 fn test_set_config_with_zero_timelock_is_rejected_before_propose() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, BatchVestingContract);
-    let client = BatchVestingContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
+    let (_contract_id, client) = register_contract_with_admin(&env, &admin);
 
     // Attempt to set timelock to 0 — should be rejected
     let result = client.try_set_config(&admin, &Config {

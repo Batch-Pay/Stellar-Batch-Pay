@@ -102,6 +102,7 @@ const OWNER_KEYPAIR = Keypair.random();
 const OWNER_PUBLIC_KEY = OWNER_KEYPAIR.publicKey();
 const SERVER_KEYPAIR = Keypair.random();
 const OTHER_PUBLIC_KEY = Keypair.random().publicKey();
+const SERVER_SIGNING_API_KEY = "test-api-key-for-server-signing-696";
 
 const baseBody = {
   network: "testnet" as const,
@@ -115,6 +116,7 @@ beforeEach(() => {
   mockGetJob.mockClear();
   delete process.env.ALLOW_SERVER_SIGNING;
   delete process.env.STELLAR_SECRET_KEY;
+  delete process.env.SERVER_SIGNING_API_KEY;
 });
 
 /** Force a job into a given status with a chosen age (ms in the past). */
@@ -144,12 +146,13 @@ function buildSignedXdr(sourceKeypair: Keypair): string {
   return tx.toEnvelope().toXDR("base64");
 }
 
-function makeRequest(body: object, idempotencyKey: string) {
+function makeRequest(body: object, idempotencyKey: string, extraHeaders?: Record<string, string>) {
   return new Request("http://localhost/api/batch-submit", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Idempotency-Key": idempotencyKey,
+      ...extraHeaders,
     },
     body: JSON.stringify(body),
   });
@@ -174,6 +177,7 @@ describe("POST /api/batch-submit idempotency", () => {
   test("rejects server signing when the configured secret does not match the request public key", async () => {
     process.env.ALLOW_SERVER_SIGNING = "true";
     process.env.STELLAR_SECRET_KEY = SERVER_KEYPAIR.secret();
+    process.env.SERVER_SIGNING_API_KEY = SERVER_SIGNING_API_KEY;
 
     const response = await POST(
       makeRequest(
@@ -190,6 +194,7 @@ describe("POST /api/batch-submit idempotency", () => {
           idempotencyKey: "mismatch-key",
         },
         "mismatch-key",
+        { Authorization: `Bearer ${SERVER_SIGNING_API_KEY}` },
       ) as never,
     );
 
@@ -287,6 +292,7 @@ describe("POST /api/batch-submit stranded-worker replay (#502)", () => {
   test("restarts a stranded server-signed job on replay", async () => {
     process.env.ALLOW_SERVER_SIGNING = "true";
     process.env.STELLAR_SECRET_KEY = SERVER_KEYPAIR.secret();
+    process.env.SERVER_SIGNING_API_KEY = SERVER_SIGNING_API_KEY;
 
     const serverBody = {
       network: "testnet" as const,
@@ -295,12 +301,12 @@ describe("POST /api/batch-submit stranded-worker replay (#502)", () => {
     };
     const idempotencyKey = "server-signed-stranded-key";
 
-    const firstJson = await (await POST(makeRequest(serverBody, idempotencyKey) as never)).json();
+    const firstJson = await (await POST(makeRequest(serverBody, idempotencyKey, { Authorization: `Bearer ${SERVER_SIGNING_API_KEY}` }) as never)).json();
     expect(mockProcessJobInBackground).toHaveBeenCalledTimes(1);
 
     setJobState(firstJson.jobId, "queued", 60_000);
 
-    const secondJson = await (await POST(makeRequest(serverBody, idempotencyKey) as never)).json();
+    const secondJson = await (await POST(makeRequest(serverBody, idempotencyKey, { Authorization: `Bearer ${SERVER_SIGNING_API_KEY}` }) as never)).json();
 
     expect(secondJson.replayed).toBe(true);
     expect(secondJson.workerRestarted).toBe(true);
@@ -428,5 +434,142 @@ describe("POST /api/batch-submit pre-signed source verification (#504)", () => {
 
     expect(response.status).toBe(202);
     expect(mockProcessJobInBackground).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /api/batch-submit server-signing auth (#696)", () => {
+  test("rejects server-signing request with correct publicKey but no API key (401)", async () => {
+    process.env.ALLOW_SERVER_SIGNING = "true";
+    process.env.STELLAR_SECRET_KEY = SERVER_KEYPAIR.secret();
+    process.env.SERVER_SIGNING_API_KEY = SERVER_SIGNING_API_KEY;
+
+    const body = {
+      network: "testnet" as const,
+      publicKey: SERVER_KEYPAIR.publicKey(),
+      payments: [{ address: OWNER_PUBLIC_KEY, amount: "1", asset: "XLM" }],
+    };
+
+    // No Authorization header
+    const response = await POST(makeRequest(body, "no-auth-key") as never);
+    const json = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(json.error).toMatch(/Authorization/i);
+    expect(mockProcessJobInBackground).not.toHaveBeenCalled();
+  });
+
+  test("rejects server-signing request with wrong API key (403)", async () => {
+    process.env.ALLOW_SERVER_SIGNING = "true";
+    process.env.STELLAR_SECRET_KEY = SERVER_KEYPAIR.secret();
+    process.env.SERVER_SIGNING_API_KEY = SERVER_SIGNING_API_KEY;
+
+    const body = {
+      network: "testnet" as const,
+      publicKey: SERVER_KEYPAIR.publicKey(),
+      payments: [{ address: OWNER_PUBLIC_KEY, amount: "1", asset: "XLM" }],
+    };
+
+    const response = await POST(
+      makeRequest(body, "wrong-auth-key", { Authorization: "Bearer wrong-key" }) as never,
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(json.error).toMatch(/Invalid server-signing API key/i);
+    expect(mockProcessJobInBackground).not.toHaveBeenCalled();
+  });
+
+  test("allows server-signing request when SERVER_SIGNING_API_KEY is not configured (backward-compat)", async () => {
+    process.env.ALLOW_SERVER_SIGNING = "true";
+    process.env.STELLAR_SECRET_KEY = SERVER_KEYPAIR.secret();
+    // SERVER_SIGNING_API_KEY is intentionally NOT set
+
+    const body = {
+      network: "testnet" as const,
+      publicKey: SERVER_KEYPAIR.publicKey(),
+      payments: [{ address: OWNER_PUBLIC_KEY, amount: "1", asset: "XLM" }],
+    };
+
+    const response = await POST(makeRequest(body, "backward-compat-key") as never);
+
+    expect(response.status).toBe(202);
+    expect(mockProcessJobInBackground).toHaveBeenCalledTimes(1);
+  });
+
+  test("allows server-signing request with valid API key", async () => {
+    process.env.ALLOW_SERVER_SIGNING = "true";
+    process.env.STELLAR_SECRET_KEY = SERVER_KEYPAIR.secret();
+    process.env.SERVER_SIGNING_API_KEY = SERVER_SIGNING_API_KEY;
+
+    const body = {
+      network: "testnet" as const,
+      publicKey: SERVER_KEYPAIR.publicKey(),
+      payments: [{ address: OWNER_PUBLIC_KEY, amount: "1", asset: "XLM" }],
+    };
+
+    const response = await POST(
+      makeRequest(body, "valid-auth-key", { Authorization: `Bearer ${SERVER_SIGNING_API_KEY}` }) as never,
+    );
+
+    expect(response.status).toBe(202);
+    expect(mockProcessJobInBackground).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /api/batch-submit — sanitized error responses (#748)", () => {
+  test("a forced unexpected failure never leaks error.message or a stack trace", async () => {
+    const sensitiveMessage =
+      "connect ECONNREFUSED /var/run/postgres/.s.PGSQL.5432";
+    mockCreateIdempotentJob.mockImplementationOnce(() => {
+      throw new Error(sensitiveMessage);
+    });
+
+    const response = await POST(
+      makeRequest(baseBody, "sanitize-test-key") as never,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.code).toBe("INTERNAL_ERROR");
+    expect(typeof body.requestId).toBe("string");
+    expect(body.requestId.length).toBeGreaterThan(0);
+
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("ECONNREFUSED");
+    expect(raw).not.toContain("/var/run/postgres");
+    expect(raw).not.toContain(".ts:");
+    expect(body).not.toHaveProperty("stack");
+  });
+
+  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
+    mockCreateIdempotentJob.mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+
+    const response = await POST(
+      makeRequest(baseBody, "sanitize-test-key-2", {
+        "x-request-id": "trace-submit-1",
+      }) as never,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.requestId).toBe("trace-submit-1");
+  });
+
+  test("an idempotency conflict (409) still includes a requestId but keeps its curated message", async () => {
+    const idempotencyKey = "conflict-key";
+    await POST(makeRequest(baseBody, idempotencyKey) as never);
+
+    const conflictingBody = { ...baseBody, signedTransactions: ["BBBB"] };
+    const response = await POST(
+      makeRequest(conflictingBody, idempotencyKey) as never,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.code).toBe("CONFLICT");
+    expect(typeof body.requestId).toBe("string");
+    expect(body.error).toMatch(/idempotency key/i);
   });
 });

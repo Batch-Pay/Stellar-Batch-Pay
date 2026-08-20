@@ -81,6 +81,35 @@ describe('JSON Parser', () => {
     const result = parseJSON(json);
     expect(result[0].amount).toBe('123.456789');
   });
+
+  // #714: Reject numeric JSON amounts to prevent silent IEEE-754 rounding
+  test('rejects unquoted numeric amount that would round silently', () => {
+    // Using raw JSON string so the amount is a literal number, not a string
+    const json = `[{"address":"GBBD47UZM2HN7D7XZIZVG4KVAUC36THN5BES6RMNNOK5TUNXAUCVMAKER","amount":99999999999.9999999,"asset":"XLM"}]`;
+    expect(() => parseJSON(json)).toThrow(/amount must be a quoted string/);
+  });
+
+  test('rejects unquoted small numeric amount that becomes scientific notation', () => {
+    const json = `[{"address":"GBBD47UZM2HN7D7XZIZVG4KVAUC36THN5BES6RMNNOK5TUNXAUCVMAKER","amount":0.0000001,"asset":"XLM"}]`;
+    expect(() => parseJSON(json)).toThrow(/amount must be a quoted string/);
+  });
+
+  test('rejects unquoted integer amount', () => {
+    const json = `[{"address":"GBBD47UZM2HN7D7XZIZVG4KVAUC36THN5BES6RMNNOK5TUNXAUCVMAKER","amount":100,"asset":"XLM"}]`;
+    expect(() => parseJSON(json)).toThrow(/amount must be a quoted string/);
+  });
+
+  test('accepts quoted string amount for large value', () => {
+    const json = `[{"address":"GBBD47UZM2HN7D7XZIZVG4KVAUC36THN5BES6RMNNOK5TUNXAUCVMAKER","amount":"99999999999.9999999","asset":"XLM"}]`;
+    const result = parseJSON(json);
+    expect(result[0].amount).toBe('99999999999.9999999');
+  });
+
+  test('accepts quoted string amount for tiny value', () => {
+    const json = `[{"address":"GBBD47UZM2HN7D7XZIZVG4KVAUC36THN5BES6RMNNOK5TUNXAUCVMAKER","amount":"0.0000001","asset":"XLM"}]`;
+    const result = parseJSON(json);
+    expect(result[0].amount).toBe('0.0000001');
+  });
 });
 
 describe('CSV Parser', () => {

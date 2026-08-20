@@ -9,7 +9,13 @@ import { DashboardWalletEmpty } from "@/components/dashboard/dashboard-wallet-em
 import { useWallet } from "@/contexts/WalletContext";
 import { toast } from "sonner";
 import type { PaymentInstruction } from "@/lib/stellar/types";
-import { buildDepositTransaction } from "@/lib/stellar/vesting";
+import {
+  buildBatchRevokeTransaction,
+  buildClaimTransaction,
+  buildDepositTransaction,
+  buildRevokeTransaction,
+} from "@/lib/stellar/vesting";
+import { acquireGuard, ReentrancyError } from "@/lib/stellar/reentrancy-guard";
 import { resolveVestingContractId } from "@/lib/stellar/vesting-config";
 import { parsePaymentFile } from "@/lib/stellar/parser";
 import { Networks, TransactionBuilder } from "stellar-sdk";
@@ -17,6 +23,8 @@ import { t } from "@/lib/i18n";
 
 interface VestingSchedule {
   id: string;
+  /** On-chain schedule index for this recipient (per-recipient, not batch row). */
+  index: number;
   recipient: string;
   amount: string;
   asset: string;
@@ -81,13 +89,19 @@ export default function VestingPage() {
 
       const schedules: VestingSchedule[] = [];
       const recipients = new Set<string>();
+      // Per-recipient on-chain indices (push_vesting appends; unique recipients
+      // each start at 0 within a fresh batch).
+      const recipientNextIndex = new Map<string, number>();
       let totalAmount = "0";
 
       for (let i = 0; i < parsedFile.validPayments.length; i++) {
         const payment = parsedFile.validPayments[i];
         recipients.add(payment.address);
+        const index = recipientNextIndex.get(payment.address) ?? 0;
+        recipientNextIndex.set(payment.address, index + 1);
         schedules.push({
           id: `${i}`,
+          index,
           recipient: payment.address,
           amount: payment.amount,
           asset: payment.asset || "XLM",
@@ -125,10 +139,62 @@ export default function VestingPage() {
     }
   };
 
+  /**
+   * Sign an assembled Soroban XDR with the connected wallet and submit it
+   * via RPC, polling briefly for confirmation. Returns the transaction hash.
+   */
+  const signAndSubmitXdr = async (
+    unsignedXdr: string,
+    network: "testnet" | "mainnet",
+  ): Promise<{ hash: string; confirmed: boolean }> => {
+    const signedXdr = await signTx(unsignedXdr, network);
+
+    const { rpc: SorobanRpc } = await import("stellar-sdk");
+    const rpcUrl =
+      network === "testnet"
+        ? "https://soroban-testnet.stellar.org"
+        : "https://soroban-mainnet.stellar.org";
+    const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+
+    const networkPassphrase =
+      network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+    const tx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
+    const sendResult = await server.sendTransaction(tx);
+
+    if (sendResult.status !== "PENDING" && sendResult.status !== "DUPLICATE") {
+      throw new Error(`Transaction submission failed: ${sendResult.status}`);
+    }
+
+    const hash = sendResult.hash;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const getResult = await server.getTransaction(hash);
+      if (getResult.status === "SUCCESS") {
+        return { hash, confirmed: true };
+      }
+      if (getResult.status === "FAILED") {
+        throw new Error("Transaction failed on-chain");
+      }
+    }
+
+    return { hash, confirmed: false };
+  };
+
   const handleSubmitBatch = async () => {
     if (!currentBatch || !publicKey) {
       toast.error(t("common.walletNotConnected"));
       return;
+    }
+
+    let release: (() => void) | null = null;
+    try {
+      release = await acquireGuard(publicKey, "deposit");
+    } catch (err) {
+      if (err instanceof ReentrancyError) {
+        toast.error(err.message);
+        return;
+      }
+      throw err;
     }
 
     try {
@@ -174,66 +240,34 @@ export default function VestingPage() {
         publicKey,
       );
 
-      const signedXdr = await signTx(unsignedXdr, network);
+      const { hash: txHash, confirmed } = await signAndSubmitXdr(unsignedXdr, network);
 
-      const { rpc: SorobanRpc } = await import("stellar-sdk");
-      const rpcUrl = network === "testnet"
-        ? "https://soroban-testnet.stellar.org"
-        : "https://soroban-mainnet.stellar.org";
-      const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
-
-      const networkPassphrase =
-        network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-      const tx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
-      const sendResult = await server.sendTransaction(tx);
-
-      if (sendResult.status === "PENDING" || sendResult.status === "DUPLICATE") {
-        const hash = sendResult.hash;
-
-        // Poll for confirmation
-        let txConfirmed = false;
-        let txHash = hash;
-        for (let i = 0; i < 30; i++) {
-          await new Promise((r) => setTimeout(r, 2000));
-          const getResult = await server.getTransaction(hash);
-          if (getResult.status === "SUCCESS") {
-            txConfirmed = true;
-            txHash = getResult.envelopeXdr
-              ? hash
-              : hash;
-            break;
-          }
-          if (getResult.status === "FAILED") {
-            throw new Error("Transaction failed on-chain");
-          }
-        }
-
-        if (!txConfirmed) {
-          toast.warning("Transaction submitted but not yet confirmed. Check history for updates.");
-        }
-
-        const submittedBatch: VestingBatch = {
-          ...currentBatch,
-          status: "submitted",
-          schedules: currentBatch.schedules.map((s) => ({
-            ...s,
-            status: "vesting" as const,
-            transactionHash: txHash,
-          })),
-        };
-        setBatches([...batches, submittedBatch]);
-        setCurrentBatch(null);
-        toast.success(t("vesting.submittedSuccess"));
-        setActiveTab("manage");
-      } else {
-        throw new Error(`Transaction submission failed: ${sendResult.status}`);
+      if (!confirmed) {
+        toast.warning("Transaction submitted but not yet confirmed. Check history for updates.");
       }
+
+      const submittedBatch: VestingBatch = {
+        ...currentBatch,
+        status: "submitted",
+        schedules: currentBatch.schedules.map((s) => ({
+          ...s,
+          status: "vesting" as const,
+          transactionHash: txHash,
+        })),
+      };
+      setBatches([...batches, submittedBatch]);
+      setCurrentBatch(null);
+      toast.success(t("vesting.submittedSuccess"));
+      setActiveTab("manage");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Submission failed";
       toast.error(msg);
       console.error(err);
     } finally {
       setIsProcessing(false);
+      if (release) {
+        release();
+      }
     }
   };
 
@@ -243,39 +277,79 @@ export default function VestingPage() {
       return;
     }
 
+    let release: (() => void) | null = null;
+    try {
+      release = await acquireGuard(publicKey, "claim");
+    } catch (err) {
+      if (err instanceof ReentrancyError) {
+        toast.error(err.message);
+        return;
+      }
+      throw err;
+    }
+
     try {
       setIsProcessing(true);
       const network = expectedNetwork === "mainnet" ? "mainnet" : "testnet";
       const contractId = resolveVestingContractId(network);
 
-      const claimRes = await fetch("/api/vesting-claim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          publicKey,
-          network: expectedNetwork,
-          recipient: schedule.recipient,
-          amount: schedule.claimableAmount,
-          contractId,
-        }),
-      });
+      // claim(recipient, index, amount) — index is required by the contract ABI.
+      const unsignedXdr = await buildClaimTransaction(
+        contractId,
+        schedule.recipient,
+        schedule.index,
+        schedule.claimableAmount,
+        network,
+        publicKey,
+        schedule.asset,
+      );
 
-      if (claimRes.ok) {
-        toast.success("Claim submitted successfully");
+      const { hash: txHash, confirmed } = await signAndSubmitXdr(unsignedXdr, network);
+
+      setBatches((prev) =>
+        prev.map((batch) => ({
+          ...batch,
+          schedules: batch.schedules.map((s) =>
+            s.id === schedule.id && s.recipient === schedule.recipient
+              ? {
+                  ...s,
+                  claimedAmount: (
+                    parseFloat(s.claimedAmount) + parseFloat(s.claimableAmount)
+                  ).toString(),
+                  claimableAmount: "0",
+                  status: "completed" as const,
+                  transactionHash: txHash,
+                }
+              : s,
+          ),
+        })),
+      );
+
+      if (!confirmed) {
+        toast.warning("Claim submitted but not yet confirmed. Check history for updates.");
       } else {
-        throw new Error("Failed to claim vesting");
+        toast.success("Claim submitted successfully");
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Claim failed";
       toast.error(msg);
+      console.error(err);
     } finally {
       setIsProcessing(false);
+      if (release) {
+        release();
+      }
     }
   };
 
-  const handleRevoke = async (schedules: VestingSchedule[]) => {
+  const handleRevoke = async (schedules: VestingSchedule[], batchId: string) => {
     if (!publicKey) {
       toast.error(t("common.walletNotConnected"));
+      return;
+    }
+
+    if (schedules.length === 0) {
+      toast.error("No schedules to revoke");
       return;
     }
 
@@ -283,32 +357,61 @@ export default function VestingPage() {
       return;
     }
 
+    let release: (() => void) | null = null;
+    try {
+      release = await acquireGuard(publicKey, "revoke");
+    } catch (err) {
+      if (err instanceof ReentrancyError) {
+        toast.error(err.message);
+        return;
+      }
+      throw err;
+    }
+
     try {
       setIsProcessing(true);
       const network = expectedNetwork === "mainnet" ? "mainnet" : "testnet";
       const contractId = resolveVestingContractId(network);
 
-      const revokeRes = await fetch("/api/vesting-revoke", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          publicKey,
-          network: expectedNetwork,
-          recipients: schedules.map((s) => s.recipient),
-          contractId,
-        }),
-      });
+      // revoke(caller, recipient, index) or batch_revoke(caller, requests)
+      // — both require exact schedule indices, not just recipient addresses.
+      const unsignedXdr =
+        schedules.length === 1
+          ? await buildRevokeTransaction(
+              contractId,
+              schedules[0].recipient,
+              schedules[0].index,
+              network,
+              publicKey,
+            )
+          : await buildBatchRevokeTransaction(
+              contractId,
+              schedules.map((s) => ({
+                recipient: s.recipient,
+                index: s.index,
+              })),
+              network,
+              publicKey,
+            );
 
-      if (revokeRes.ok) {
-        toast.success("Vesting schedules revoked successfully");
+      const { confirmed } = await signAndSubmitXdr(unsignedXdr, network);
+
+      setBatches((prev) => prev.filter((b) => b.id !== batchId));
+
+      if (!confirmed) {
+        toast.warning("Revoke submitted but not yet confirmed. Check history for updates.");
       } else {
-        throw new Error("Failed to revoke vesting");
+        toast.success("Vesting schedules revoked successfully");
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Revoke failed";
       toast.error(msg);
+      console.error(err);
     } finally {
       setIsProcessing(false);
+      if (release) {
+        release();
+      }
     }
   };
 
@@ -546,7 +649,7 @@ export default function VestingPage() {
                   </div>
                   <div className="flex gap-2">
                     <Button
-                      onClick={() => handleRevoke(batch.schedules)}
+                      onClick={() => handleRevoke(batch.schedules, batch.id)}
                       variant="destructive"
                       className="w-full"
                       disabled={isProcessing}

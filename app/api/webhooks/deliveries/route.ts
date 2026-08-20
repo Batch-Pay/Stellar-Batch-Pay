@@ -12,6 +12,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid limit parameter" }, { status: 400 });
   }
 
-  const deliveries = getWebhookDeliveries({ jobId, webhookId, limit });
+  const deliveries = await getWebhookDeliveries({ jobId, webhookId, limit });
   return NextResponse.json({ deliveries });
 }

@@ -52,13 +52,13 @@ describe('Issue #386: createJob persists signedTransactions', () => {
       },
     ];
 
-    const jobId = jobStore.createJob(
+    const jobId = await jobStore.createJob(
       payments,
       'testnet',
       'GDQERHRWJYV7JHRP5V7DWJVI6Y5ABZP3YRH7DKYJRBEGJQKE6IQEOSY2',
       signedXdrs
     );
-    const job = jobStore.getJob(jobId);
+    const job = await jobStore.getJob(jobId);
 
     expect(job).toBeDefined();
     expect(job?.signedTransactions).toEqual(signedXdrs);
@@ -75,12 +75,12 @@ describe('Issue #386: createJob persists signedTransactions', () => {
       },
     ];
 
-    const jobId = jobStore.createJob(
+    const jobId = await jobStore.createJob(
       payments,
       'testnet',
       'GDQERHRWJYV7JHRP5V7DWJVI6Y5ABZP3YRH7DKYJRBEGJQKE6IQEOSY2'
     );
-    const job = jobStore.getJob(jobId);
+    const job = await jobStore.getJob(jobId);
 
     expect(job?.signedTransactions).toBeUndefined();
   });

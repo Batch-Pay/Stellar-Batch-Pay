@@ -48,9 +48,36 @@ export NODE_ENV="production"
 - Automated test pipelines (e.g. `tests/batch-submit.test.ts` sets this to `"true"`)
 - Staging environments running automated batch jobs
 
+### `SERVER_SIGNING_API_KEY` — Cryptographic Authorization (#696)
+
+| Variable                  | Default         | Purpose                                                                                 |
+| ------------------------- | --------------- | --------------------------------------------------------------------------------------- |
+| `SERVER_SIGNING_API_KEY`  | `""` (unset)    | Secret API key required in the `Authorization: Bearer` header for server-signing requests |
+
+When `ALLOW_SERVER_SIGNING=true`, the server now enforces cryptographic authorization
+on `/api/batch-submit` and `/api/batch-retry`. Callers must include the API key in the
+`Authorization` header:
+
+```
+Authorization: Bearer <SERVER_SIGNING_API_KEY>
+```
+
+**Generate a secure key:**
+
+```bash
+openssl rand -hex 32
+# Example output: a1b2c3d4e5f6...64-char-hex-string
+```
+
+**Backward-compatibility:** If `SERVER_SIGNING_API_KEY` is not set, the server
+accepts server-signing requests without credential verification (the previous
+behavior) but logs a deprecation warning on every request. Operators should
+configure this variable in every deployment where server signing is enabled.
+
 **Security warnings:**
 
 - `ALLOW_SERVER_SIGNING=true` centralises key risk on the server. A compromised server can sign and submit arbitrary transactions.
+- Always set `SERVER_SIGNING_API_KEY` when enabling server signing — it provides defense-in-depth beyond the network-layer controls.
 - Never enable on public-facing production endpoints without additional access controls (VPN, IP allowlist, or mutual TLS).
 - Requires `STELLAR_SECRET_KEY` to be set; the flag has no effect without it.
 - Audit all access logs when this flag is active.
@@ -59,6 +86,7 @@ export NODE_ENV="production"
 # Staging / internal use only
 export ALLOW_SERVER_SIGNING=true
 export STELLAR_SECRET_KEY="S..."
+export SERVER_SIGNING_API_KEY="$(openssl rand -hex 32)"
 
 # Production (public) — leave unset; users sign via Freighter wallet
 # ALLOW_SERVER_SIGNING is intentionally absent
@@ -69,6 +97,22 @@ export STELLAR_SECRET_KEY="S..."
 > ```json
 > {
 >   "error": "Server-side signing is disabled. Use client-side signing with a connected wallet, or enable ALLOW_SERVER_SIGNING=true in server configuration."
+> }
+> ```
+>
+> **API error for missing credential (401):**
+>
+> ```json
+> {
+>   "error": "Missing or malformed Authorization header. Server-signing requests require an 'Authorization: Bearer <SERVER_SIGNING_API_KEY>' header."
+> }
+> ```
+>
+> **API error for invalid credential (403):**
+>
+> ```json
+> {
+>   "error": "Invalid server-signing API key. The provided Authorization token does not match the configured SERVER_SIGNING_API_KEY."
 > }
 > ```
 >
@@ -331,45 +375,81 @@ Update your frontend `.env` file with the newly deployed Contract ID:
 NEXT_PUBLIC_CONTRACT_ID="C..."
 ```
 
-## SQLite persistence (batch jobs and rate limits)
+## Persistence and deployment modes
 
-The API stores batch jobs in SQLite via `better-sqlite3`. By default:
+The API supports two deployment modes for batch job state, idempotency, and rate
+limits. Set `DEPLOYMENT_MODE` to choose the right one.
+
+### Single-node mode (default)
+
+```bash
+DEPLOYMENT_MODE=single-node  # or omit; this is the default
+```
+
+Jobs and rate limits are stored in local SQLite files. This is safe when exactly
+one process accesses the store (e.g. `next start` behind a single-container
+deploy, PM2 in cluster mode sharing the same filesystem, or Docker with a
+mounted volume).
 
 | Variable             | Default                | Purpose                   |
 | -------------------- | ---------------------- | ------------------------- |
 | `JOB_STORE_PATH`     | `./data/jobs.db`       | Durable batch job state   |
 | `RATE_LIMIT_DB_PATH` | `./data/rate-limit.db` | Per-key API rate limiting |
 
-SQLite is configured with:
-- **WAL mode** (Write-Ahead Logging)** for improved read concurrency.
-- **`busy_timeout = 5000ms`** to avoid immediate SQLITE_BUSY errors during concurrent writes.
-- **Retry with jitter** in `updateJob` to gracefully handle transient lock conflicts.
+SQLite is configured with WAL mode, `busy_timeout = 5000ms`, and retry-with-jitter
+to handle transient lock conflicts.
 
-Vercel serverless functions use a read-only filesystem except `/tmp`. Without
-explicit paths, job persistence can fail silently or reset on every cold start.
+> **Warning:** Setting `JOB_STORE_PATH` or `RATE_LIMIT_DB_PATH` to `/tmp/*`
+> makes them ephemeral. In-flight jobs and rate-limit state are lost on restart.
+> The health endpoint flags this.
 
-**Recommended hosting:**
-
-1. **Serverful Node** — long-running `next start`, PM2, or Docker with a writable `data/` directory.
-2. **Persistent volume** — mount a volume at `data/` (Kubernetes PVC, ECS EFS, etc.).
-3. **Managed SQL** — replace SQLite with Turso, Postgres, or another shared store (requires application changes).
-
-**Ephemeral demo on serverless** (data is lost between invocations):
+### HA mode (multi-instance)
 
 ```bash
-export JOB_STORE_PATH=/tmp/jobs.db
-export RATE_LIMIT_DB_PATH=/tmp/rate-limit.db
+DEPLOYMENT_MODE=ha
+JOB_STORE_BACKEND=postgres   # default when ha
+RATE_LIMIT_BACKEND=redis     # default when ha (also supports postgres)
+DATABASE_URL=postgres://user:pass@host/dbname
+REDIS_URL=redis://host:6379
 ```
 
-**Health check** — verify directories are writable before routing traffic:
+Jobs and idempotency keys are stored in Postgres; rate limits use Redis (or
+Postgres). All replicas share the same state, so:
+
+- Idempotent submit is globally convergent (no duplicate payments).
+- Rate limits apply fleet-wide.
+- In-flight jobs survive cold starts and replica replacement.
+
+| Variable              | Required when                       | Purpose                     |
+| --------------------- | ----------------------------------- | --------------------------- |
+| `DATABASE_URL`        | `JOB_STORE_BACKEND=postgres`        | Postgres connection string  |
+| `REDIS_URL`           | `RATE_LIMIT_BACKEND=redis`          | Redis connection string     |
+| `JOB_STORE_BACKEND`   | Optional; defaults to `postgres`    | `sqlite` or `postgres`      |
+| `RATE_LIMIT_BACKEND`  | Optional; defaults to `redis`       | `sqlite`, `postgres`, `redis` |
+
+The health endpoint (`GET /api/health`) reports `deploymentMode`, each backend's
+connectivity status, and returns 503 when any store is unreachable or
+misconfigured. Use it as a readiness probe.
+
+### Which mode is safe?
+
+| Topology                          | Mode          | Safe? |
+| --------------------------------- | ------------- | ----- |
+| Single container / single process | `single-node` | ✅     |
+| Multiple replicas, shared volume  | `single-node` | ⚠️ Only with a single writer |
+| Multiple replicas, no shared disk | `ha`          | ✅     |
+| Serverless (ephemeral `/tmp`)     | `ha`          | ✅     |
+| Serverless (ephemeral `/tmp`)     | `single-node` | ❌ Data lost on cold start    |
+
+**Health check** — verify store connectivity before routing traffic:
 
 ```bash
 curl -s http://localhost:3000/api/health
-# Returns 200 when job_store and rate_limit paths are writable, 503 otherwise
+# Returns 200 with backend info, or 503 with config issues / connectivity errors
 ```
 
-Set `JOB_STORE_PATH` and `RATE_LIMIT_DB_PATH` in the same environment as your
-API routes (Vercel project settings, Docker env, or systemd unit).
+Set persistence variables in the same environment as your API routes (Vercel
+project settings, Docker env, or systemd unit).
 
 ## Hosting Options
 

@@ -5,9 +5,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BatchResult } from '@/lib/stellar/types';
 import { fetchBatchHistory, setCachedHistory, clearCachedHistory } from '@/lib/batch-history-adapter';
 import { batchHistoryKeys } from '@/lib/query-keys';
+import { useOptionalWalletSession } from '@/contexts/WalletSessionContext';
 
 export function useBatchHistory(publicKey?: string | null) {
   const queryClient = useQueryClient();
+  const walletSession = useOptionalWalletSession();
+  const sessionToken = walletSession?.sessionToken ?? null;
   // Central key factory (#521): this account's parent batch-history key.
   const queryKey = batchHistoryKeys.all(publicKey);
 
@@ -18,7 +21,7 @@ export function useBatchHistory(publicKey?: string | null) {
       setCachedHistory(items);
       return items;
     },
-    enabled: !!publicKey,
+    enabled: !!publicKey && !!sessionToken,
     staleTime: 30 * 1000,
     placeholderData: (previousData) => previousData ?? [],
   });

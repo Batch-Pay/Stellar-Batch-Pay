@@ -13,6 +13,8 @@ import { StrKey } from "stellar-sdk";
 import { getJob } from "@/lib/job-store";
 import { safeJsonResponse } from "@/lib/safe-json";
 import { requireWalletAuth } from "@/lib/wallet-auth";
+import { requireWalletAuth } from "@/lib/wallet-auth";
+import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
 
 export async function GET(request: NextRequest) {
   const requestId = getRequestId(request);

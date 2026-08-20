@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useWallet } from "@/contexts/WalletContext";
@@ -11,6 +11,7 @@ import { getBatchSummary } from "@/lib/stellar/summary";
 import { canonicalizeIdempotencyPayload } from "@/lib/idempotency";
 import { authenticatedFetch } from "@/lib/wallet-session-client";
 import { useOptionalWalletSession } from "@/contexts/WalletSessionContext";
+import { isSubmissionBlocked } from "@/lib/stellar/job-lifecycle";
 import type {
   ParsedPaymentFile,
   BatchResult,
@@ -67,6 +68,7 @@ interface BatchFlowContextType {
   setSummary: (summary: any) => void;
   isSubmitting: boolean;
   setIsSubmitting: (submitting: boolean) => void;
+  hasActiveJob: boolean;
   result: BatchResult | null;
   setResult: (res: BatchResult | null) => void;
   jobId: string | null;
@@ -424,8 +426,19 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
     setStep(2);
   }, [manualPayments]);
 
+  const hasActiveJob = useMemo(
+    () => isSubmissionBlocked({ isSubmitting, jobId, jobStatus }),
+    [isSubmitting, jobId, jobStatus],
+  );
+
   const onSubmit = useCallback(async (filteredPayments: PaymentInstruction[]) => {
     if (!publicKey) return;
+    if (isSubmissionBlocked({ isSubmitting, jobId, jobStatus })) {
+      toast.error(
+        "A batch submission is already in progress. Please wait for it to finish before submitting again.",
+      );
+      return;
+    }
     setIsSubmitting(true);
     try {
       const response = await fetch("/api/batch-submit", {
@@ -463,7 +476,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
           : "Failed to submit batch",
       );
     }
-  }, [publicKey, network, startPolling]);
+  }, [publicKey, network, startPolling, isSubmitting, jobId, jobStatus]);
 
   return (
     <BatchFlowContext.Provider
@@ -484,6 +497,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
         setSummary,
         isSubmitting,
         setIsSubmitting,
+        hasActiveJob,
         result,
         setResult,
         jobId,

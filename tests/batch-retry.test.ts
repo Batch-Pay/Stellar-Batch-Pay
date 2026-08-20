@@ -155,7 +155,7 @@ if (typeof globalThis !== "undefined" && !(globalThis as any).FileReaderSync) {
   };
 }
 
-import { createJob, updateJob, getJob } from "@/lib/job-store";
+import { createJob, updateJob, getJob, createIdempotentJob } from "@/lib/job-store";
 import { POST } from "@/app/api/batch-retry/route";
 import type { BatchResult, PaymentInstruction } from "@/lib/stellar/types";
 import { parseFileStream } from "@/lib/stellar/parser";
@@ -425,5 +425,60 @@ describe("POST /api/batch-retry (#388)", () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toMatch(/Horizon reconciliation is pending/i);
+  });
+});
+
+describe("POST /api/batch-retry — sanitized error responses (#748)", () => {
+  let jobId: string;
+
+  beforeEach(async () => {
+    jobId = await createJob(payments, "testnet", OWNER);
+    await updateJob(jobId, { status: "completed", result: completedResult });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("a forced unexpected failure never leaks error.message or a stack trace", async () => {
+    const sensitiveMessage =
+      "EACCES: permission denied, open '/etc/stellar/server-signing-key'";
+    vi.mocked(createIdempotentJob).mockImplementationOnce(() => {
+      throw new Error(sensitiveMessage);
+    });
+
+    const res = await POST(
+      makeRequest({ jobId, publicKey: OWNER }) as never,
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.code).toBe("INTERNAL_ERROR");
+    expect(typeof body.requestId).toBe("string");
+    expect(body.requestId.length).toBeGreaterThan(0);
+
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("EACCES");
+    expect(raw).not.toContain("/etc/stellar");
+    expect(raw).not.toContain("server-signing-key");
+    expect(raw).not.toContain(".ts:");
+    expect(body).not.toHaveProperty("stack");
+  });
+
+  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
+    vi.mocked(createIdempotentJob).mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+
+    const res = await POST(
+      makeRequest(
+        { jobId, publicKey: OWNER },
+        { "x-request-id": "trace-retry-1" },
+      ) as never,
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.requestId).toBe("trace-retry-1");
   });
 });

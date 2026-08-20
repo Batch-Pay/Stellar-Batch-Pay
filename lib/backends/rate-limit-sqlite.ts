@@ -12,6 +12,9 @@ export type EndpointKey =
   | "dashboard-metrics"
   | "batch-status"
   | "batch-events"
+  | "batch-retry"
+  | "batch-recover"
+  | "batch-history"
   | "health";
 
 export type EndpointLimit = {

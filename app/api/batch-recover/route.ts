@@ -14,8 +14,20 @@ import { getJob } from "@/lib/job-store";
 import { safeJsonResponse } from "@/lib/safe-json";
 import { requireWalletAuth } from "@/lib/wallet-auth";
 import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
+import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
 
 export async function GET(request: NextRequest) {
+  // #743: batch-recover returns per-job success/failure detail and is
+  // enumerable by jobId, so it's rate-limited like the other job-detail
+  // polling endpoints before any lookup happens.
+  const rate = await applyRateLimit(request, "batch-recover");
+  if (rate.blocked) return rate.response!;
+
+  const response = await handleRecover(request);
+  return setRateLimitHeaders(response, rate);
+}
+
+async function handleRecover(request: NextRequest): Promise<NextResponse> {
   const requestId = getRequestId(request);
 
   try {

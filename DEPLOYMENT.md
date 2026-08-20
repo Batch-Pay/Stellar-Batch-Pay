@@ -629,6 +629,34 @@ const apiLimiter = rateLimit({
 app.use("/api/", apiLimiter);
 ```
 
+The app itself doesn't use the example above — it applies `applyRateLimit()` /
+`setRateLimitHeaders()` per-route from `lib/api-rate-limit.ts`, with policies
+keyed by endpoint and subscription tier (see `DEFAULT_LIMITS` in that file).
+Every rate-limited response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+and `X-RateLimit-Reset` headers, plus `Retry-After` when blocked (HTTP 429).
+
+Current per-endpoint policies (requests per rolling window, per tier):
+
+| Endpoint              | Free | Pro | Enterprise | Window | Why                                                             |
+| --------------------- | ---- | --- | ---------- | ------ | ---------------------------------------------------------------- |
+| `batch-build`         | 8    | 20  | 60         | 60s    | Builds unsigned transactions                                     |
+| `batch-submit`        | 5    | 15  | 45         | 60s    | Enqueues paid, server-signed work                                 |
+| `batch-submit-signed` | 5    | 15  | 45         | 60s    | Enqueues paid, client-signed work                                 |
+| `batch-retry`         | 5    | 15  | 45         | 60s    | Can re-enqueue paid, server-signed work (#743)                    |
+| `batch-recover`       | 30   | 100 | 300        | 60s    | Enumerable per-job detail lookup (#743)                           |
+| `batch-history`       | 20   | 60  | 180        | 60s    | Enumerable, supports search/aggregation across all jobs (#743)    |
+| `batch-status`        | 60   | 200 | 600        | 60s    | Lightweight single-job polling                                    |
+| `batch-events`        | 10   | 30  | 90         | 60s    | SSE stream open                                                   |
+| `tx-status`           | 30   | 100 | 300        | 60s    | Single transaction status lookup                                  |
+| `dashboard-metrics`   | 20   | 60  | 180        | 60s    | Aggregation across jobs                                           |
+| `webhook-register`    | 3    | 10  | 30         | 60s    | Registers outbound webhook callbacks                              |
+| `health`              | 30   | 100 | 300        | 60s    | Liveness/readiness checks                                         |
+
+`RATE_LIMIT_BACKEND` (see above) determines where counters are stored —
+SQLite for single-instance deployments, Redis or Postgres for HA. Limits can
+be tuned via environment variables read by `tunedLimit()` in
+`lib/api-rate-limit.ts` without redeploying code.
+
 ### 4. Input Validation
 
 Always validate at the edge:

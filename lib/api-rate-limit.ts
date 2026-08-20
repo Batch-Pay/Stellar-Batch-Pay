@@ -37,6 +37,17 @@ const DEFAULT_LIMITS: Record<EndpointKey, EndpointLimit> = {
   "dashboard-metrics": { free: 20, pro: 60, enterprise: 180, windowMs: 60_000 },
   "batch-status": { free: 60, pro: 200, enterprise: 600, windowMs: 60_000 },
   "batch-events": { free: 10, pro: 30, enterprise: 90, windowMs: 60_000 },
+  // #743: batch-retry can enqueue paid work (server-signed retries move real
+  // funds), so it is limited like batch-submit rather than a read endpoint.
+  "batch-retry": { free: 5, pro: 15, enterprise: 45, windowMs: 60_000 },
+  // #743: batch-recover exposes per-job success/failure detail and is
+  // enumerable by jobId, so it gets the same budget as tx-status/batch-status
+  // polling rather than the tighter write-endpoint limits.
+  "batch-recover": { free: 30, pro: 100, enterprise: 300, windowMs: 60_000 },
+  // #743: batch-history supports free-text search and aggregate summaries
+  // across a wallet's full job history, so it is limited like the other
+  // aggregation endpoint (dashboard-metrics) rather than a cheap status poll.
+  "batch-history": { free: 20, pro: 60, enterprise: 180, windowMs: 60_000 },
   health: { free: 30, pro: 100, enterprise: 300, windowMs: 60_000 },
 };
 
@@ -52,6 +63,9 @@ const endpointLimits: Record<EndpointKey, EndpointLimit> = {
   "dashboard-metrics": tunedLimit("dashboard-metrics", DEFAULT_LIMITS["dashboard-metrics"]),
   "batch-status": tunedLimit("batch-status", DEFAULT_LIMITS["batch-status"]),
   "batch-events": tunedLimit("batch-events", DEFAULT_LIMITS["batch-events"]),
+  "batch-retry": tunedLimit("batch-retry", DEFAULT_LIMITS["batch-retry"]),
+  "batch-recover": tunedLimit("batch-recover", DEFAULT_LIMITS["batch-recover"]),
+  "batch-history": tunedLimit("batch-history", DEFAULT_LIMITS["batch-history"]),
   health: tunedLimit("health", DEFAULT_LIMITS.health),
 };
 

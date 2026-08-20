@@ -16,6 +16,14 @@ process.env.WALLET_AUTH_HOME_DOMAIN = "localhost";
 process.env.WALLET_AUTH_WEB_AUTH_DOMAIN = "stellar-batch-pay-recover-test";
 process.env.WALLET_AUTH_NETWORK_PASSPHRASE = Networks.TESTNET;
 
+// #743: exercise batch-recover's own business logic without being
+// throttled by the newly-added rate limit; 429 behavior is covered
+// separately in tests/api-rate-limit-endpoints.test.ts.
+vi.mock("@/lib/api-rate-limit", () => ({
+  applyRateLimit: vi.fn(() => ({ blocked: false, response: undefined })),
+  setRateLimitHeaders: vi.fn((response: Response) => response),
+}));
+
 import { createJob, updateJob } from "@/lib/job-store";
 import { GET } from "@/app/api/batch-recover/route";
 import { createTestWalletSession } from "@/lib/wallet-auth";

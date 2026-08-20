@@ -178,8 +178,11 @@ describe("GET /api/batch-recover — sanitized error responses (#748)", () => {
     const url = new URL("http://localhost/api/batch-recover");
     url.searchParams.set("jobId", "some-job");
     url.searchParams.set("publicKey", PUBLIC_KEY);
-    const req = new Request(url.toString(), {
-      headers: { "x-request-id": "trace-abc-123" },
+    const req = new NextRequest(url.toString(), {
+      headers: {
+        "x-request-id": "trace-abc-123",
+        Authorization: `Bearer ${createTestWalletSession(PUBLIC_KEY)}`,
+      },
     });
 
     const res = await GET(req as never);

@@ -12,6 +12,7 @@ import { StrKey } from "stellar-sdk";
 import { getJob } from "@/lib/job-store";
 import { safeJsonResponse } from "@/lib/safe-json";
 import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
+import { requireWalletAuth } from "@/lib/wallet-auth";
 
 interface RouteParams {
   params: Promise<{ jobId: string }>;
@@ -40,6 +41,14 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         { error: "A valid publicKey query parameter is required" },
         { status: 400 },
       ),
+      rate,
+    );
+  }
+
+  const auth = requireWalletAuth(request, publicKey);
+  if (!auth.valid) {
+    return setRateLimitHeaders(
+      NextResponse.json({ error: auth.error }, { status: auth.status ?? 401 }),
       rate,
     );
   }

@@ -156,6 +156,14 @@ if (typeof globalThis !== "undefined" && !(globalThis as any).FileReaderSync) {
 }
 
 import { createJob, updateJob, getJob, createIdempotentJob } from "@/lib/job-store";
+// #743: exercise batch-retry's own business logic without being throttled
+// by the newly-added rate limit; 429 behavior is covered separately in
+// tests/api-rate-limit-endpoints.test.ts.
+vi.mock("@/lib/api-rate-limit", () => ({
+  applyRateLimit: vi.fn(() => ({ blocked: false, response: undefined })),
+  setRateLimitHeaders: vi.fn((response: Response) => response),
+}));
+
 import { POST } from "@/app/api/batch-retry/route";
 import type { BatchResult, PaymentInstruction } from "@/lib/stellar/types";
 import { parseFileStream } from "@/lib/stellar/parser";

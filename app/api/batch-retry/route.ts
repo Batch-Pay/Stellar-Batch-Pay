@@ -25,6 +25,7 @@ import { logger } from "@/lib/logger";
 import { createHash } from "crypto";
 import { validateServerSigningAuth } from "@/lib/server-signing-auth";
 import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
+import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
 
 /**
  * Derive the public key from a secret and return it, or return null if the
@@ -47,6 +48,18 @@ function hashRequestBody(body: { jobId: string; publicKey: string }): string {
 }
 
 export async function POST(request: NextRequest) {
+  // #743: retry can enqueue paid work (server-signed transactions), so it
+  // gets the same rate-limit treatment as batch-submit before any other
+  // processing happens. Every response path below — success, validation
+  // error, or failure — carries the resulting rate-limit headers.
+  const rate = await applyRateLimit(request, "batch-retry");
+  if (rate.blocked) return rate.response!;
+
+  const response = await handleRetry(request);
+  return setRateLimitHeaders(response, rate);
+}
+
+async function handleRetry(request: NextRequest): Promise<NextResponse> {
   const requestId = getRequestId(request);
   // Declared here so the catch block can reference it for logging (#515).
   let jobId: string | undefined;

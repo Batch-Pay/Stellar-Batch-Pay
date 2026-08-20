@@ -7,6 +7,7 @@ import { ChevronDown, ChevronUp, ChevronRight, Loader2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useWallet } from "@/contexts/WalletContext"
+import { useWalletSessionContext } from "@/contexts/WalletSessionContext"
 import { fetchHistory, batchHistoryQueryKey, type HistoricalBatch } from "@/lib/dashboard/fetch-history"
 import { cn } from "@/lib/utils"
 
@@ -74,6 +75,7 @@ export function HistoryTable({
 }: HistoryTableProps) {
   const router = useRouter()
   const { publicKey } = useWallet()
+  const { sessionToken } = useWalletSessionContext()
   const [debouncedSearch, setDebouncedSearch] = useState(searchFilter ?? "")
   const [sortColumn, setSortColumn] = useState<"createdAt" | "updatedAt" | "status">("createdAt")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc")
@@ -113,7 +115,7 @@ export function HistoryTable({
         sort: sortColumn,
         order: sortOrder,
       }),
-    enabled: !!publicKey && !data,
+    enabled: !!publicKey && !!sessionToken && !data,
     staleTime: 30 * 1000,
     placeholderData: (previousData) =>
       previousData ?? { items: [], pagination: { totalPages: 1, total: 0 } },

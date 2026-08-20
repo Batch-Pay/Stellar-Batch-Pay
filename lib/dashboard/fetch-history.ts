@@ -24,6 +24,7 @@ export interface BatchHistoryResponse {
 }
 
 import { BATCH_HISTORY_QUERY_KEY, batchHistoryKeys } from "@/lib/query-keys"
+import { authenticatedFetch } from "@/lib/wallet-session-client"
 
 // Re-exported from the central query-key factory (#521) so existing imports
 // (`@/lib/dashboard/fetch-history`) keep working while there is one source of
@@ -66,7 +67,10 @@ export async function fetchHistory(params: {
   if (params.order) urlParams.set("order", params.order)
   urlParams.set("includeSummary", "true")
 
-  const res = await fetch(`/api/batch-history?${urlParams.toString()}`)
+  const res = await authenticatedFetch(
+    `/api/batch-history?${urlParams.toString()}`,
+    params.publicKey,
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }

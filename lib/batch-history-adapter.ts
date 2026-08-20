@@ -7,6 +7,7 @@
  */
 
 import type { BatchResult, JobState, BatchJobNetwork } from "./stellar/types";
+import { authenticatedFetch } from "./wallet-session-client";
 
 const CACHE_KEY = "stellar_batch_history_cache";
 const CACHE_VERSION_KEY = "stellar_batch_history_version";
@@ -54,7 +55,7 @@ export async function fetchBatchHistory(
   if (options?.status) params.set("status", options.status);
   if (options?.network) params.set("network", options.network);
 
-  const response = await fetch(`/api/batch-history?${params.toString()}`);
+  const response = await authenticatedFetch(`/api/batch-history?${params.toString()}`, publicKey);
   
   if (!response.ok) {
     throw new Error(`Failed to fetch batch history: ${response.statusText}`);
@@ -92,7 +93,10 @@ export async function fetchFullBatchResult(
   publicKey: string
 ): Promise<BatchResult | null> {
   const params = new URLSearchParams({ publicKey });
-  const response = await fetch(`/api/batch-status/${encodeURIComponent(jobId)}?${params.toString()}`);
+  const response = await authenticatedFetch(
+    `/api/batch-status/${encodeURIComponent(jobId)}?${params.toString()}`,
+    publicKey,
+  );
 
   if (!response.ok) {
     throw new Error(`Failed to fetch batch details: ${response.statusText}`);

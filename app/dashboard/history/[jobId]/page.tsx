@@ -22,6 +22,8 @@ import {
   mapBatchStatusToDetailView,
   type BatchDetailView,
 } from "@/lib/dashboard/batch-detail";
+import { authenticatedFetch } from "@/lib/wallet-session-client";
+import { useWalletSessionContext } from "@/contexts/WalletSessionContext";
 
 interface JobStatusResponse {
   status: string;
@@ -49,7 +51,10 @@ function downloadFile(filename: string, contents: string, mime: string) {
 
 async function fetchBatchDetail(jobId: string, publicKey: string): Promise<BatchDetailView> {
   const params = new URLSearchParams({ publicKey });
-  const res = await fetch(`/api/batch-status/${jobId}?${params.toString()}`);
+  const res = await authenticatedFetch(
+    `/api/batch-status/${jobId}?${params.toString()}`,
+    publicKey,
+  );
   if (!res.ok) {
     throw new Error(`Failed to load batch (HTTP ${res.status})`);
   }
@@ -64,6 +69,7 @@ export default function BatchDetailPage({
 }) {
   const { jobId } = use(params);
   const { publicKey } = useWallet();
+  const { sessionToken } = useWalletSessionContext();
   const { pushBatchNotification } = useNotifications();
   const [retrying, setRetrying] = useState(false);
   const [retryJobId, setRetryJobId] = useState<string | null>(null);
@@ -86,7 +92,7 @@ export default function BatchDetailPage({
   const { data, error, isLoading } = useQuery({
     queryKey: ["job", jobId, publicKey],
     queryFn: () => fetchBatchDetail(jobId, publicKey!),
-    enabled: !!publicKey,
+    enabled: !!publicKey && !!sessionToken,
     staleTime: 5 * 1000,
     refetchInterval: (query) =>
       query.state.data?.status === "completed" || query.state.data?.status === "failed" ? false : 5000,
@@ -123,8 +129,9 @@ export default function BatchDetailPage({
 
       const poll = async () => {
         try {
-          const r = await fetch(
+          const r = await authenticatedFetch(
             `/api/batch-status/${newJobId}?publicKey=${encodeURIComponent(publicKey!)}`,
+            publicKey,
           );
           if (!r.ok) throw new Error(`Status fetch failed (${r.status})`);
           const jb = (await r.json()) as JobStatusResponse;

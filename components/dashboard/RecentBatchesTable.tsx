@@ -12,6 +12,7 @@ import {
   fetchHistory,
   type HistoricalBatch,
 } from "@/lib/dashboard/fetch-history"
+import { useWalletSessionContext } from "@/contexts/WalletSessionContext"
 import { cn } from "@/lib/utils"
 
 export interface BatchRecord {
@@ -37,6 +38,7 @@ export function RecentBatchesTable({
   limit = 5,
   className,
 }: RecentBatchesTableProps) {
+  const { sessionToken } = useWalletSessionContext()
   const queryKey = useMemo(
     () => batchHistoryQueryKey(publicKey, network, { limit }),
     [publicKey, network, limit],
@@ -51,7 +53,7 @@ export function RecentBatchesTable({
         limit,
         networkFilter: network,
       }),
-    enabled: !!publicKey && !batches,
+    enabled: !!publicKey && !!sessionToken && !batches,
     staleTime: 30 * 1000,
     placeholderData: (previousData) =>
       previousData ?? { items: [], pagination: { totalPages: 1, total: 0 } },

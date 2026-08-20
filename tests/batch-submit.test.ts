@@ -515,3 +515,61 @@ describe("POST /api/batch-submit server-signing auth (#696)", () => {
     expect(mockProcessJobInBackground).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("POST /api/batch-submit — sanitized error responses (#748)", () => {
+  test("a forced unexpected failure never leaks error.message or a stack trace", async () => {
+    const sensitiveMessage =
+      "connect ECONNREFUSED /var/run/postgres/.s.PGSQL.5432";
+    mockCreateIdempotentJob.mockImplementationOnce(() => {
+      throw new Error(sensitiveMessage);
+    });
+
+    const response = await POST(
+      makeRequest(baseBody, "sanitize-test-key") as never,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.code).toBe("INTERNAL_ERROR");
+    expect(typeof body.requestId).toBe("string");
+    expect(body.requestId.length).toBeGreaterThan(0);
+
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("ECONNREFUSED");
+    expect(raw).not.toContain("/var/run/postgres");
+    expect(raw).not.toContain(".ts:");
+    expect(body).not.toHaveProperty("stack");
+  });
+
+  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
+    mockCreateIdempotentJob.mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+
+    const response = await POST(
+      makeRequest(baseBody, "sanitize-test-key-2", {
+        "x-request-id": "trace-submit-1",
+      }) as never,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.requestId).toBe("trace-submit-1");
+  });
+
+  test("an idempotency conflict (409) still includes a requestId but keeps its curated message", async () => {
+    const idempotencyKey = "conflict-key";
+    await POST(makeRequest(baseBody, idempotencyKey) as never);
+
+    const conflictingBody = { ...baseBody, signedTransactions: ["BBBB"] };
+    const response = await POST(
+      makeRequest(conflictingBody, idempotencyKey) as never,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.code).toBe("CONFLICT");
+    expect(typeof body.requestId).toBe("string");
+    expect(body.error).toMatch(/idempotency key/i);
+  });
+});

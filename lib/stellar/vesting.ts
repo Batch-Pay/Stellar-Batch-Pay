@@ -298,7 +298,7 @@ export async function buildDepositTransaction(
   publicKey: string,
 ): Promise<string> {
   // Reentrancy guard: reject concurrent deposit calls for the same account (#250).
-  const release = acquireGuard(publicKey, "deposit");
+  const release = await acquireGuard(publicKey, "deposit");
   try {
     const networkPassphrase =
       network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
@@ -384,16 +384,21 @@ export async function buildClaimTransaction(
   publicKey: string,
   asset: string = "XLM",
 ): Promise<string> {
-  const contract = new Contract(contractId);
-  const tokenAddress = assetToTokenAddress(asset, network);
-  const operation = contract.call(
-    "claim",
-    new Address(recipient).toScVal(),
-    nativeToScVal(BigInt(index), { type: "u32" }),
-    await amountToScVal(amount, asset, tokenAddress, network, publicKey),
-  );
+  const release = await acquireGuard(publicKey, "claim");
+  try {
+    const contract = new Contract(contractId);
+    const tokenAddress = assetToTokenAddress(asset, network);
+    const operation = contract.call(
+      "claim",
+      new Address(recipient).toScVal(),
+      nativeToScVal(BigInt(index), { type: "u32" }),
+      await amountToScVal(amount, asset, tokenAddress, network, publicKey),
+    );
 
-  return buildSorobanTransaction(contractId, operation, network, publicKey);
+    return await buildSorobanTransaction(contractId, operation, network, publicKey);
+  } finally {
+    release();
+  }
 }
 
 /**
@@ -406,18 +411,94 @@ export async function buildRevokeTransaction(
   network: "testnet" | "mainnet",
   publicKey: string,
 ): Promise<string> {
-  const contract = new Contract(contractId);
-  const operation = contract.call(
-    "revoke",
-    // The contract signature is `revoke(env, caller, recipient, index)` and the
-    // sender authorization is checked against `caller`. Omitting it produces an
-    // XDR that does not match the contract interface (#392).
-    new Address(publicKey).toScVal(),
-    new Address(recipient).toScVal(),
-    nativeToScVal(BigInt(index), { type: "u32" }),
-  );
+  const release = await acquireGuard(publicKey, "revoke");
+  try {
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "revoke",
+      // The contract signature is `revoke(env, caller, recipient, index)` and the
+      // sender authorization is checked against `caller`. Omitting it produces an
+      // XDR that does not match the contract interface (#392).
+      new Address(publicKey).toScVal(),
+      new Address(recipient).toScVal(),
+      nativeToScVal(BigInt(index), { type: "u32" }),
+    );
 
-  return buildSorobanTransaction(contractId, operation, network, publicKey);
+    return await buildSorobanTransaction(contractId, operation, network, publicKey);
+  } finally {
+    release();
+  }
+}
+
+/** One (recipient, index) pair for {@link buildBatchRevokeTransaction}. */
+export interface VestingRevokeRequest {
+  recipient: string;
+  index: number;
+}
+
+/**
+ * Encode a contract `RevokeRequest { recipient, index }` as an ScMap.
+ * Map keys are sorted alphabetically (`index` before `recipient`) as required
+ * by the Soroban XDR encoding rules.
+ */
+function revokeRequestToScVal(request: VestingRevokeRequest): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("index"),
+      val: nativeToScVal(request.index, { type: "u32" }),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("recipient"),
+      val: new Address(request.recipient).toScVal(),
+    }),
+  ]);
+}
+
+/**
+ * Sort revoke requests so each recipient's indices appear in strictly
+ * descending order — required by `batch_revoke` / `revoke_batch` (#308/#505).
+ * Recipients are grouped for a stable, deterministic order.
+ */
+export function sortRevokeRequestsDescending(
+  requests: VestingRevokeRequest[],
+): VestingRevokeRequest[] {
+  return [...requests].sort((a, b) => {
+    if (a.recipient !== b.recipient) {
+      return a.recipient < b.recipient ? -1 : 1;
+    }
+    return b.index - a.index;
+  });
+}
+
+/**
+ * Build an unsigned transaction to revoke multiple vesting schedules in one
+ * `batch_revoke(caller, requests)` call. Requests are sorted into the
+ * strictly-descending-per-recipient order the contract requires.
+ */
+export async function buildBatchRevokeTransaction(
+  contractId: string,
+  requests: VestingRevokeRequest[],
+  network: "testnet" | "mainnet",
+  publicKey: string,
+): Promise<string> {
+  if (requests.length === 0) {
+    throw new Error("batch_revoke requires at least one (recipient, index) pair");
+  }
+
+  const release = await acquireGuard(publicKey, "revoke");
+  try {
+    const sorted = sortRevokeRequestsDescending(requests);
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "batch_revoke",
+      new Address(publicKey).toScVal(),
+      xdr.ScVal.scvVec(sorted.map(revokeRequestToScVal)),
+    );
+
+    return await buildSorobanTransaction(contractId, operation, network, publicKey);
+  } finally {
+    release();
+  }
 }
 
 /**
@@ -428,37 +509,42 @@ export async function buildBumpInstanceTtlTransaction(
   network: "testnet" | "mainnet",
   publicKey: string,
 ): Promise<string> {
-  const networkPassphrase =
-    network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-  const rpcUrl = SOROBAN_RPC_URLS[network];
+  const release = await acquireGuard(publicKey, "bump");
+  try {
+    const networkPassphrase =
+      network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+    const rpcUrl = SOROBAN_RPC_URLS[network];
 
-  const { rpc: SorobanRpc } = await import("stellar-sdk");
-  const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+    const { rpc: SorobanRpc } = await import("stellar-sdk");
+    const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
 
-  const sourceAccount = await server.getAccount(publicKey);
-  const account = new Account(
-    sourceAccount.accountId(),
-    sourceAccount.sequenceNumber(),
-  );
+    const sourceAccount = await server.getAccount(publicKey);
+    const account = new Account(
+      sourceAccount.accountId(),
+      sourceAccount.sequenceNumber(),
+    );
 
-  const contract = new Contract(contractId);
-  const operation = contract.call("bump_instance_ttl");
+    const contract = new Contract(contractId);
+    const operation = contract.call("bump_instance_ttl");
 
-  const tx = new TransactionBuilder(account, {
-    fee: "1000000",
-    networkPassphrase,
-  })
-    .addOperation(operation)
-    .setTimeout(300)
-    .build();
+    const tx = new TransactionBuilder(account, {
+      fee: "1000000",
+      networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(300)
+      .build();
 
-  const simResult = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Simulation failed: ${simResult.error}`);
+    const simResult = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+
+    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+    return preparedTx.toEnvelope().toXDR("base64");
+  } finally {
+    release();
   }
-
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-  return preparedTx.toEnvelope().toXDR("base64");
 }
 
 /**
@@ -477,15 +563,20 @@ export async function buildTransferVestingRightsTransaction(
   network: "testnet" | "mainnet",
   publicKey: string,
 ): Promise<string> {
-  const contract = new Contract(contractId);
-  const operation = contract.call(
-    "transfer_vesting_rights",
-    new Address(from).toScVal(),
-    nativeToScVal(BigInt(index), { type: "u32" }),
-    new Address(to).toScVal(),
-  );
+  const release = await acquireGuard(publicKey, "transfer");
+  try {
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "transfer_vesting_rights",
+      new Address(from).toScVal(),
+      nativeToScVal(BigInt(index), { type: "u32" }),
+      new Address(to).toScVal(),
+    );
 
-  return buildSorobanTransaction(contractId, operation, network, publicKey);
+    return await buildSorobanTransaction(contractId, operation, network, publicKey);
+  } finally {
+    release();
+  }
 }
 
 /**
@@ -498,39 +589,44 @@ export async function buildBumpVestingTtlTransaction(
   network: "testnet" | "mainnet",
   publicKey: string,
 ): Promise<string> {
-  const networkPassphrase =
-    network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-  const rpcUrl = SOROBAN_RPC_URLS[network];
+  const release = await acquireGuard(publicKey, "bump");
+  try {
+    const networkPassphrase =
+      network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+    const rpcUrl = SOROBAN_RPC_URLS[network];
 
-  const { rpc: SorobanRpc } = await import("stellar-sdk");
-  const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+    const { rpc: SorobanRpc } = await import("stellar-sdk");
+    const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
 
-  const sourceAccount = await server.getAccount(publicKey);
-  const account = new Account(
-    sourceAccount.accountId(),
-    sourceAccount.sequenceNumber(),
-  );
+    const sourceAccount = await server.getAccount(publicKey);
+    const account = new Account(
+      sourceAccount.accountId(),
+      sourceAccount.sequenceNumber(),
+    );
 
-  const contract = new Contract(contractId);
-  const operation = contract.call(
-    "bump_vesting_ttl",
-    new Address(recipient).toScVal(),
-    nativeToScVal(index, { type: "u32" }),
-  );
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "bump_vesting_ttl",
+      new Address(recipient).toScVal(),
+      nativeToScVal(index, { type: "u32" }),
+    );
 
-  const tx = new TransactionBuilder(account, {
-    fee: "1000000",
-    networkPassphrase,
-  })
-    .addOperation(operation)
-    .setTimeout(300)
-    .build();
+    const tx = new TransactionBuilder(account, {
+      fee: "1000000",
+      networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(300)
+      .build();
 
-  const simResult = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Simulation failed: ${simResult.error}`);
+    const simResult = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+
+    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+    return preparedTx.toEnvelope().toXDR("base64");
+  } finally {
+    release();
   }
-
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-  return preparedTx.toEnvelope().toXDR("base64");
 }

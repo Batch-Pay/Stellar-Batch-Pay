@@ -43,6 +43,7 @@ import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
 import { canonicalizeIdempotencyPayload } from "@/lib/idempotency";
 import { logger } from "@/lib/logger";
 import { validateServerSigningAuth } from "@/lib/server-signing-auth";
+import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
 
 interface RequestBody {
   payments?: PaymentInstruction[];
@@ -122,7 +123,7 @@ export async function POST(request: NextRequest) {
   const rate = await applyRateLimit(request, "batch-submit");
   if (rate.blocked) return rate.response!;
 
-  const requestId = request.headers.get("x-request-id");
+  const requestId = getRequestId(request);
 
   try {
     // Parse request body
@@ -419,17 +420,18 @@ export async function POST(request: NextRequest) {
     if (error instanceof IdempotencyConflictError) {
       logger.warn({ requestId }, `Idempotency conflict: ${error.message}`);
       return setRateLimitHeaders(safeJsonResponse(
-        { error: error.message },
+        { error: error.message, code: "CONFLICT", requestId },
         { status: 409 },
       ), rate);
     }
 
-    logger.error({ requestId }, "Batch submission error", error);
-    return setRateLimitHeaders(safeJsonResponse(
-      {
-        error: error instanceof Error ? error.message : "Internal server error",
-      },
-      { status: 500 },
-    ), rate);
+    return setRateLimitHeaders(
+      sanitizedErrorResponse(error, {
+        requestId,
+        status: 500,
+        logMessage: "Batch submission error",
+      }),
+      rate,
+    );
   }
 }

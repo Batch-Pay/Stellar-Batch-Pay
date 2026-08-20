@@ -39,6 +39,20 @@ const BAD_SEQUENCE_RETRY_LIMIT = Math.max(
   Number.parseInt(process.env.STELLAR_BAD_SEQUENCE_RETRY_LIMIT ?? "3", 10) || 3,
 );
 
+function submissionErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.length > 0) return message;
+
+    const txCode = (error as {
+      response?: { data?: { extras?: { result_codes?: { transaction?: unknown } } } };
+    }).response?.data?.extras?.result_codes?.transaction;
+    if (typeof txCode === "string" && txCode.length > 0) return txCode;
+  }
+  return "Unknown transaction submission error";
+}
+
 export class StellarService {
   private keypair: Keypair;
   private server: Horizon.Server;
@@ -216,8 +230,7 @@ export class StellarService {
         }
       }
 
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = submissionErrorMessage(error);
 
       for (const i of addedResultIndices) {
         results[i].status = reconciledStatus;
@@ -231,9 +244,53 @@ export class StellarService {
         results,
         submitted: reconciledStatus === "success",
         totalAmount: totalAmountBig,
-        needsReload: isBadSequenceError(error),
+        needsReload:
+          reconciledStatus !== "success" && isBadSequenceError(error),
       };
     }
+  }
+
+  /**
+   * Submit one transaction with bounded bad-sequence (tx_bad_seq) retries (#747).
+   * Reloads the source account from Horizon if a sequence conflict occurs.
+   * If the first attempt actually landed on-chain (reconciledStatus === "success"),
+   * no retry occurs and no duplicate transaction is submitted.
+   */
+  private async submitOneWithRetry(
+    batchPayments: PaymentInstruction[],
+    initialSourceAccount: Account,
+    fee: number,
+    txIndex: number,
+  ): Promise<{
+    outcome: {
+      results: PaymentResult[];
+      submitted: boolean;
+      totalAmount: Big;
+      needsReload: boolean;
+    };
+    sourceAccount: Account;
+  }> {
+    let sourceAccount = initialSourceAccount;
+    let retries = 0;
+    let outcome;
+
+    while (true) {
+      outcome = await this.submitOneTransaction(
+        batchPayments,
+        sourceAccount,
+        fee,
+        txIndex,
+      );
+
+      if (outcome.needsReload && retries < BAD_SEQUENCE_RETRY_LIMIT) {
+        retries++;
+        sourceAccount = await this.server.loadAccount(this.keypair.publicKey());
+        continue;
+      }
+      break;
+    }
+
+    return { outcome, sourceAccount };
   }
 
   /**
@@ -297,24 +354,14 @@ export class StellarService {
       let totalAmountBig = new Big(0);
 
       for (const batch of batches) {
-        let retries = 0;
-        let outcome;
-
-        while (true) {
-          outcome = await this.submitOneTransaction(
+        const { outcome, sourceAccount: updatedSourceAccount } =
+          await this.submitOneWithRetry(
             batch.payments,
             sourceAccount,
             fee,
             txCount,
           );
-
-          if (outcome.needsReload && retries < BAD_SEQUENCE_RETRY_LIMIT) {
-            retries++;
-            sourceAccount = await this.server.loadAccount(this.keypair.publicKey());
-            continue;
-          }
-          break;
-        }
+        sourceAccount = updatedSourceAccount;
 
         results.push(...outcome.results);
         totalAmountBig = totalAmountBig.plus(outcome.totalAmount);
@@ -347,6 +394,8 @@ export class StellarService {
    * per-transaction limits (e.g. via createBatches). The background worker uses
    * this so that the number of Horizon submissions matches the job's
    * totalBatches and fees are not inflated by a second batching pass. (#503)
+   *
+   * Automatically reloads the source account and retries on tx_bad_seq (#747).
    */
   async submitSingleBatch(
     payments: PaymentInstruction[],
@@ -359,7 +408,7 @@ export class StellarService {
       );
       const fee = await getRecommendedFee(this.server);
 
-      const outcome = await this.submitOneTransaction(
+      const { outcome } = await this.submitOneWithRetry(
         payments,
         sourceAccount,
         fee,

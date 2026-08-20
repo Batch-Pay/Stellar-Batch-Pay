@@ -12,10 +12,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { Horizon } from "stellar-sdk";
 import { horizonUrl } from "@/lib/stellar/network-config";
 import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
+import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
 
 export async function GET(request: NextRequest) {
   const rate = await applyRateLimit(request, "tx-status");
   if (rate.blocked) return rate.response!;
+
+  const requestId = getRequestId(request);
 
   const { searchParams } = request.nextUrl;
   const hash = searchParams.get("hash");
@@ -23,14 +26,14 @@ export async function GET(request: NextRequest) {
 
   if (!hash || typeof hash !== "string") {
     return NextResponse.json(
-      { error: "Missing required query parameter: hash" },
+      { error: "Missing required query parameter: hash", code: "BAD_REQUEST", requestId },
       { status: 400 },
     );
   }
 
   if (network !== "testnet" && network !== "mainnet") {
     return NextResponse.json(
-      { error: "network must be 'testnet' or 'mainnet'" },
+      { error: "network must be 'testnet' or 'mainnet'", code: "BAD_REQUEST", requestId },
       { status: 400 },
     );
   }
@@ -72,14 +75,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to query transaction status",
-      },
-      { status: 500 },
-    );
+    return sanitizedErrorResponse(error, {
+      requestId,
+      status: 500,
+      logMessage: "Transaction status query error",
+    });
   }
 }

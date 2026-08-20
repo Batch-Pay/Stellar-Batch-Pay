@@ -1,0 +1,1194 @@
+diff --git a/app/api/batch-build/route.ts b/app/api/batch-build/route.ts
+index 295c343..4088598 100644
+--- a/app/api/batch-build/route.ts
++++ b/app/api/batch-build/route.ts
+@@ -43,6 +43,7 @@ import { getRecommendedFee } from "@/lib/stellar/fee-service";
+ import { MAX_UPLOAD_ROWS } from "@/lib/stellar/parser";
+ import { truncateMemoToBytes } from "@/lib/stellar/utils";
+ import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
++import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
+ 
+ interface RequestBody {
+   payments: PaymentInstruction[];
+@@ -68,6 +69,8 @@ export async function POST(request: NextRequest) {
+   const rate = await applyRateLimit(request, "batch-build");
+   if (rate.blocked) return rate.response!;
+ 
++  const requestId = getRequestId(request);
++
+   try {
+     const body = (await request.json()) as RequestBody;
+     const { payments, network, publicKey } = body;
+@@ -288,20 +291,20 @@ export async function POST(request: NextRequest) {
+       maxTransactionBytes: STELLAR_TRANSACTION_SIZE_LIMIT_BYTES,
+     }), rate);
+   } catch (error) {
+-    console.error("Batch build error:", error);
+     if (error instanceof BatchMemoConflictError) {
+       return setRateLimitHeaders(safeJsonResponse(
+-        { error: error.message },
++        { error: error.message, code: "BAD_REQUEST", requestId },
+         { status: 400 },
+       ), rate);
+     }
+ 
+-    return setRateLimitHeaders(safeJsonResponse(
+-      {
+-        error:
+-          error instanceof Error ? error.message : "Internal server error",
+-      },
+-      { status: 500 },
+-    ), rate);
++    return setRateLimitHeaders(
++      sanitizedErrorResponse(error, {
++        requestId,
++        status: 500,
++        logMessage: "Batch build error",
++      }),
++      rate,
++    );
+   }
+ }
+diff --git a/app/api/batch-recover/route.ts b/app/api/batch-recover/route.ts
+index a44bb3a..3b5f4db 100644
+--- a/app/api/batch-recover/route.ts
++++ b/app/api/batch-recover/route.ts
+@@ -11,15 +11,18 @@
+ import { NextRequest, NextResponse } from "next/server";
+ import { getJob } from "@/lib/job-store";
+ import { safeJsonResponse } from "@/lib/safe-json";
++import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
+ 
+ export async function GET(request: NextRequest) {
++  const requestId = getRequestId(request);
++
+   try {
+     const { searchParams } = new URL(request.url);
+     const jobId = searchParams.get("jobId");
+ 
+     if (!jobId || typeof jobId !== "string") {
+       return NextResponse.json(
+-        { error: "jobId is required" },
++        { error: "jobId is required", code: "BAD_REQUEST", requestId },
+         { status: 400 },
+       );
+     }
+@@ -27,7 +30,7 @@ export async function GET(request: NextRequest) {
+     const publicKey = searchParams.get("publicKey");
+     if (!publicKey) {
+       return NextResponse.json(
+-        { error: "publicKey is required" },
++        { error: "publicKey is required", code: "BAD_REQUEST", requestId },
+         { status: 400 },
+       );
+     }
+@@ -40,6 +43,8 @@ export async function GET(request: NextRequest) {
+       return safeJsonResponse(
+         {
+           error: "Batch not found or not completed yet",
++          code: "NOT_FOUND",
++          requestId,
+           jobId,
+         },
+         { status: 404 },
+@@ -72,17 +77,11 @@ export async function GET(request: NextRequest) {
+       ready: failedTransactions.length > 0,
+     });
+   } catch (error: unknown) {
+-    console.error("Batch recovery error:", error);
+-
+-    return safeJsonResponse(
+-      {
+-        success: false,
+-        error:
+-          error instanceof Error
+-            ? error.message
+-            : "Failed to recover batch information",
+-      },
+-      { status: 500 },
+-    );
++    return sanitizedErrorResponse(error, {
++      requestId,
++      status: 500,
++      logMessage: "Batch recovery error",
++      extraFields: { success: false },
++    });
+   }
+ }
+diff --git a/app/api/batch-retry/route.ts b/app/api/batch-retry/route.ts
+index 2fe250a..2dadd38 100644
+--- a/app/api/batch-retry/route.ts
++++ b/app/api/batch-retry/route.ts
+@@ -24,6 +24,7 @@ import { safeJsonResponse } from "@/lib/safe-json";
+ import { logger } from "@/lib/logger";
+ import { createHash } from "crypto";
+ import { validateServerSigningAuth } from "@/lib/server-signing-auth";
++import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
+ 
+ /**
+  * Derive the public key from a secret and return it, or return null if the
+@@ -46,7 +47,7 @@ function hashRequestBody(body: { jobId: string; publicKey: string }): string {
+ }
+ 
+ export async function POST(request: NextRequest) {
+-  const requestId = request.headers.get("x-request-id");
++  const requestId = getRequestId(request);
+   // Declared here so the catch block can reference it for logging (#515).
+   let jobId: string | undefined;
+ 
+@@ -343,18 +344,18 @@ export async function POST(request: NextRequest) {
+       return NextResponse.json(
+         {
+           error: "Idempotency key already exists for a different request body",
++          code: "CONFLICT",
++          requestId,
+         },
+         { status: 409 },
+       );
+     }
+ 
+-    logger.error({ requestId }, "Batch retry error", error);
+-    return safeJsonResponse(
+-      {
+-        error:
+-          error instanceof Error ? error.message : "Failed to create retry job",
+-      },
+-      { status: 500 },
+-    );
++    return sanitizedErrorResponse(error, {
++      requestId,
++      status: 500,
++      logMessage: "Batch retry error",
++      context: { jobId },
++    });
+   }
+ }
+diff --git a/app/api/batch-submit-signed/route.ts b/app/api/batch-submit-signed/route.ts
+index 6bf2337..4ee7f14 100644
+--- a/app/api/batch-submit-signed/route.ts
++++ b/app/api/batch-submit-signed/route.ts
+@@ -21,6 +21,8 @@ import {
+     isInsufficientFeeError,
+ } from "@/lib/stellar/submit-errors";
+ import { getXdrSourceAccount, operationCountOf } from "@/lib/stellar/xdr-source";
++import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
++import { logger } from "@/lib/logger";
+ 
+ interface RequestBody {
+     signedXdr: string;
+@@ -49,6 +51,8 @@ export async function POST(request: NextRequest) {
+     const rate = await applyRateLimit(request, "batch-submit-signed");
+     if (rate.blocked) return rate.response!;
+ 
++    const requestId = getRequestId(request);
++
+     try {
+         const body = (await request.json()) as RequestBody;
+         const { signedXdr, network, publicKey } = body;
+@@ -152,23 +156,41 @@ export async function POST(request: NextRequest) {
+             throw submissionError;
+         }
+     } catch (error: unknown) {
+-        console.error("Submit signed tx error:", error);
+-
+-        // Extract Horizon-specific error details if available
+-        const horizonExtras =
+-            error && typeof error === "object" && "response" in error
+-                ? (error as { response?: { data?: { extras?: { result_codes?: unknown } } } })
+-                    .response?.data?.extras?.result_codes
+-                : undefined;
+-
+-        return setRateLimitHeaders(safeJsonResponse(
+-            {
+-                success: false,
+-                error:
+-                    error instanceof Error ? error.message : "Transaction submission failed",
+-                resultCodes: horizonExtras,
+-            },
+-            { status: 400 },
+-        ), rate);
++        // Horizon result codes (e.g. tx_failed / op_underfunded) are stable,
++        // documented codes, not internal details — safe to surface so the
++        // client can react. Anything else (JSON parse failures, malformed
++        // XDR, unexpected errors) is sanitized: only a generic message, a
++        // stable code, and requestId go to the client; full detail is logged
++        // server-side (#748).
++        const classified = classifySubmitError(error);
++
++        if (classified.code !== "UNKNOWN") {
++            logger.error(
++                { requestId },
++                "Submit signed tx error (classified)",
++                error,
++            );
++            return setRateLimitHeaders(safeJsonResponse(
++                {
++                    success: false,
++                    error: classified.message,
++                    code: classified.code,
++                    action: classified.action,
++                    resultCodes: classified.resultCodes,
++                    requestId,
++                },
++                { status: 400 },
++            ), rate);
++        }
++
++        return setRateLimitHeaders(
++            sanitizedErrorResponse(error, {
++                requestId,
++                status: 400,
++                logMessage: "Submit signed tx error",
++                extraFields: { success: false },
++            }),
++            rate,
++        );
+     }
+ }
+diff --git a/app/api/batch-submit/route.ts b/app/api/batch-submit/route.ts
+index c9ee1cf..ed79eb1 100644
+--- a/app/api/batch-submit/route.ts
++++ b/app/api/batch-submit/route.ts
+@@ -43,6 +43,7 @@ import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
+ import { canonicalizeIdempotencyPayload } from "@/lib/idempotency";
+ import { logger } from "@/lib/logger";
+ import { validateServerSigningAuth } from "@/lib/server-signing-auth";
++import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
+ 
+ interface RequestBody {
+   payments?: PaymentInstruction[];
+@@ -122,7 +123,7 @@ export async function POST(request: NextRequest) {
+   const rate = await applyRateLimit(request, "batch-submit");
+   if (rate.blocked) return rate.response!;
+ 
+-  const requestId = request.headers.get("x-request-id");
++  const requestId = getRequestId(request);
+ 
+   try {
+     // Parse request body
+@@ -419,17 +420,18 @@ export async function POST(request: NextRequest) {
+     if (error instanceof IdempotencyConflictError) {
+       logger.warn({ requestId }, `Idempotency conflict: ${error.message}`);
+       return setRateLimitHeaders(safeJsonResponse(
+-        { error: error.message },
++        { error: error.message, code: "CONFLICT", requestId },
+         { status: 409 },
+       ), rate);
+     }
+ 
+-    logger.error({ requestId }, "Batch submission error", error);
+-    return setRateLimitHeaders(safeJsonResponse(
+-      {
+-        error: error instanceof Error ? error.message : "Internal server error",
+-      },
+-      { status: 500 },
+-    ), rate);
++    return setRateLimitHeaders(
++      sanitizedErrorResponse(error, {
++        requestId,
++        status: 500,
++        logMessage: "Batch submission error",
++      }),
++      rate,
++    );
+   }
+ }
+diff --git a/app/api/tx-status/route.ts b/app/api/tx-status/route.ts
+index 1f4dc90..a4b3c1d 100644
+--- a/app/api/tx-status/route.ts
++++ b/app/api/tx-status/route.ts
+@@ -12,25 +12,28 @@ import { NextRequest, NextResponse } from "next/server";
+ import { Horizon } from "stellar-sdk";
+ import { horizonUrl } from "@/lib/stellar/network-config";
+ import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
++import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
+ 
+ export async function GET(request: NextRequest) {
+   const rate = await applyRateLimit(request, "tx-status");
+   if (rate.blocked) return rate.response!;
+ 
++  const requestId = getRequestId(request);
++
+   const { searchParams } = request.nextUrl;
+   const hash = searchParams.get("hash");
+   const network = searchParams.get("network");
+ 
+   if (!hash || typeof hash !== "string") {
+     return NextResponse.json(
+-      { error: "Missing required query parameter: hash" },
++      { error: "Missing required query parameter: hash", code: "BAD_REQUEST", requestId },
+       { status: 400 },
+     );
+   }
+ 
+   if (network !== "testnet" && network !== "mainnet") {
+     return NextResponse.json(
+-      { error: "network must be 'testnet' or 'mainnet'" },
++      { error: "network must be 'testnet' or 'mainnet'", code: "BAD_REQUEST", requestId },
+       { status: 400 },
+     );
+   }
+@@ -72,14 +75,10 @@ export async function GET(request: NextRequest) {
+       );
+     }
+ 
+-    return NextResponse.json(
+-      {
+-        error:
+-          error instanceof Error
+-            ? error.message
+-            : "Failed to query transaction status",
+-      },
+-      { status: 500 },
+-    );
++    return sanitizedErrorResponse(error, {
++      requestId,
++      status: 500,
++      logMessage: "Transaction status query error",
++    });
+   }
+ }
+diff --git a/lib/api-error.ts b/lib/api-error.ts
+new file mode 100644
+index 0000000..354c6f5
+--- /dev/null
++++ b/lib/api-error.ts
+@@ -0,0 +1,116 @@
++/**
++ * Shared error-sanitization helpers for API routes (#748).
++ *
++ * Several money routes (batch-submit, batch-build, batch-retry,
++ * batch-recover, batch-submit-signed, tx-status) used to catch arbitrary
++ * Horizon/SDK exceptions and return `error.message` — and sometimes a raw
++ * stack trace — straight to the client. That's an information-disclosure
++ * risk: it hands an attacker Horizon/SDK internals, and occasionally
++ * filesystem paths, useful for mapping out infrastructure and failure modes.
++ *
++ * The fix: routes must never forward a caught error's `message` or `stack`
++ * to the client. Instead:
++ *   - Full error detail (message, stack) is logged server-side via
++ *     `logger.error`, tagged with a `requestId`.
++ *   - The client only ever receives a stable public `code`, a generic
++ *     `error` message, and that same `requestId` so support can correlate
++ *     the report with the corresponding server-side log line.
++ */
++
++import { logger, type LogContext } from "@/lib/logger";
++import { safeJsonResponse } from "@/lib/safe-json";
++
++/** Stable, client-facing error codes. Never derived from the caught error. */
++export type PublicErrorCode =
++  | "BAD_REQUEST"
++  | "UNAUTHORIZED"
++  | "FORBIDDEN"
++  | "NOT_FOUND"
++  | "CONFLICT"
++  | "RATE_LIMITED"
++  | "INTERNAL_ERROR";
++
++const PUBLIC_MESSAGE: Record<PublicErrorCode, string> = {
++  BAD_REQUEST: "The request could not be processed.",
++  UNAUTHORIZED: "Authentication is required.",
++  FORBIDDEN: "You are not permitted to perform this action.",
++  NOT_FOUND: "The requested resource was not found.",
++  CONFLICT: "The request conflicts with existing state.",
++  RATE_LIMITED: "Too many requests. Please try again later.",
++  INTERNAL_ERROR:
++    "An unexpected error occurred. Please try again or contact support.",
++};
++
++const STATUS_TO_CODE: Record<number, PublicErrorCode> = {
++  400: "BAD_REQUEST",
++  401: "UNAUTHORIZED",
++  403: "FORBIDDEN",
++  404: "NOT_FOUND",
++  409: "CONFLICT",
++  429: "RATE_LIMITED",
++  500: "INTERNAL_ERROR",
++};
++
++/**
++ * Resolve the request ID used for both the log line and the response body.
++ *
++ * Honors a caller-supplied `x-request-id` header (so a client-generated ID
++ * threads end-to-end through logs) and otherwise mints a fresh UUID. Call
++ * this once near the top of a route handler and reuse the same value for
++ * every log call and error response in that handler.
++ */
++export function getRequestId(request: Request): string {
++  return request.headers.get("x-request-id")?.trim() || crypto.randomUUID();
++}
++
++export interface SanitizedErrorOptions {
++  /** The request ID to log alongside the error and echo back to the client. */
++  requestId: string;
++  /** HTTP status to respond with. Defaults to 500. */
++  status?: number;
++  /** Short, human-readable message for the server-side log line only. */
++  logMessage: string;
++  /** Override the stable public code (defaults to a mapping from `status`). */
++  code?: PublicErrorCode;
++  /** Override the public-facing message (defaults to a mapping from `code`). */
++  publicMessage?: string;
++  /** Extra structured log context (e.g. jobId, publicKey, network). */
++  context?: LogContext;
++  /**
++   * Extra fields to merge into the response body alongside `error`, `code`,
++   * and `requestId` (e.g. `{ success: false }` to match a route's existing
++   * shape). Never put raw error detail here — it defeats the sanitization.
++   */
++  extraFields?: Record<string, unknown>;
++}
++
++/**
++ * Log the full error server-side and return a sanitized client response.
++ *
++ * The response body is always exactly `{ error, code, requestId }` — never
++ * the caught error's `message` or `stack`, and never a filesystem path.
++ */
++export function sanitizedErrorResponse(
++  error: unknown,
++  options: SanitizedErrorOptions,
++) {
++  const status = options.status ?? 500;
++  const code = options.code ?? STATUS_TO_CODE[status] ?? "INTERNAL_ERROR";
++  const publicMessage = options.publicMessage ?? PUBLIC_MESSAGE[code];
++
++  logger.error(
++    { requestId: options.requestId, ...options.context },
++    options.logMessage,
++    error,
++  );
++
++  return safeJsonResponse(
++    {
++      ...options.extraFields,
++      error: publicMessage,
++      code,
++      requestId: options.requestId,
++    },
++    { status },
++  );
++}
+diff --git a/tests/api-error.test.ts b/tests/api-error.test.ts
+new file mode 100644
+index 0000000..8ae3c3c
+--- /dev/null
++++ b/tests/api-error.test.ts
+@@ -0,0 +1,179 @@
++/**
++ * Unit tests for the shared API error-sanitization helper (#748).
++ */
++
++import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
++import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
++
++describe("getRequestId", () => {
++  test("returns the caller-supplied x-request-id header when present", () => {
++    const req = new Request("http://localhost/api/whatever", {
++      headers: { "x-request-id": "client-supplied-id" },
++    });
++    expect(getRequestId(req)).toBe("client-supplied-id");
++  });
++
++  test("trims whitespace from a supplied header", () => {
++    const req = new Request("http://localhost/api/whatever", {
++      headers: { "x-request-id": "  padded-id  " },
++    });
++    expect(getRequestId(req)).toBe("padded-id");
++  });
++
++  test("mints a fresh UUID when no header is supplied", () => {
++    const req = new Request("http://localhost/api/whatever");
++    const id = getRequestId(req);
++    expect(id).toMatch(
++      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
++    );
++  });
++
++  test("mints a fresh UUID when the header is blank", () => {
++    const req = new Request("http://localhost/api/whatever", {
++      headers: { "x-request-id": "   " },
++    });
++    const id = getRequestId(req);
++    expect(id).toMatch(
++      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
++    );
++  });
++
++  test("two calls without a header produce different ids", () => {
++    const a = getRequestId(new Request("http://localhost/api/a"));
++    const b = getRequestId(new Request("http://localhost/api/b"));
++    expect(a).not.toBe(b);
++  });
++});
++
++describe("sanitizedErrorResponse", () => {
++  let errorSpy: ReturnType<typeof vi.spyOn>;
++
++  beforeEach(() => {
++    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
++  });
++
++  afterEach(() => {
++    errorSpy.mockRestore();
++  });
++
++  test("never includes the caught error's message in the response body", async () => {
++    const sensitiveError = new Error(
++      "ENOENT: no such file or directory, open '/var/secrets/stellar-secret-key.pem'",
++    );
++    const res = sanitizedErrorResponse(sensitiveError, {
++      requestId: "req-1",
++      status: 500,
++      logMessage: "Something broke",
++    });
++    const body = await res.json();
++
++    expect(res.status).toBe(500);
++    expect(JSON.stringify(body)).not.toContain("ENOENT");
++    expect(JSON.stringify(body)).not.toContain("/var/secrets");
++    expect(JSON.stringify(body)).not.toContain(
++      "stellar-secret-key.pem",
++    );
++  });
++
++  test("never includes a stack trace in the response body", async () => {
++    const error = new Error("boom");
++    const res = sanitizedErrorResponse(error, {
++      requestId: "req-2",
++      status: 500,
++      logMessage: "Something broke",
++    });
++    const body = await res.json();
++
++    expect(body).not.toHaveProperty("stack");
++    expect(JSON.stringify(body)).not.toContain("at ");
++    expect(JSON.stringify(body)).not.toContain(".ts:");
++  });
++
++  test("response body is exactly {error, code, requestId} by default", async () => {
++    const res = sanitizedErrorResponse(new Error("internal detail"), {
++      requestId: "req-3",
++      status: 500,
++      logMessage: "Something broke",
++    });
++    const body = await res.json();
++
++    expect(Object.keys(body).sort()).toEqual(["code", "error", "requestId"]);
++    expect(body.requestId).toBe("req-3");
++    expect(body.code).toBe("INTERNAL_ERROR");
++  });
++
++  test("maps status codes to stable public codes", async () => {
++    const cases: Array<[number, string]> = [
++      [400, "BAD_REQUEST"],
++      [401, "UNAUTHORIZED"],
++      [403, "FORBIDDEN"],
++      [404, "NOT_FOUND"],
++      [409, "CONFLICT"],
++      [429, "RATE_LIMITED"],
++      [500, "INTERNAL_ERROR"],
++    ];
++
++    for (const [status, code] of cases) {
++      const res = sanitizedErrorResponse(new Error("x"), {
++        requestId: "req",
++        status,
++        logMessage: "x",
++      });
++      const body = await res.json();
++      expect(body.code).toBe(code);
++      expect(res.status).toBe(status);
++    }
++  });
++
++  test("extraFields are merged into the body without overriding requestId/code", async () => {
++    const res = sanitizedErrorResponse(new Error("internal detail"), {
++      requestId: "req-4",
++      status: 400,
++      logMessage: "x",
++      extraFields: { success: false },
++    });
++    const body = await res.json();
++
++    expect(body.success).toBe(false);
++    expect(body.requestId).toBe("req-4");
++    expect(body.code).toBe("BAD_REQUEST");
++  });
++
++  test("logs the full error server-side, tagged with requestId, for support correlation", async () => {
++    const error = new Error("the real, detailed failure reason");
++    sanitizedErrorResponse(error, {
++      requestId: "req-5",
++      status: 500,
++      logMessage: "Route X failed",
++      context: { jobId: "job-123" },
++    });
++
++    expect(errorSpy).toHaveBeenCalledTimes(1);
++    const logged = errorSpy.mock.calls[0][0] as string;
++    expect(logged).toContain("req-5");
++    expect(logged).toContain("job-123");
++    expect(logged).toContain("the real, detailed failure reason");
++  });
++
++  test("defaults to status 500 / INTERNAL_ERROR when status is omitted", async () => {
++    const res = sanitizedErrorResponse(new Error("x"), {
++      requestId: "req-6",
++      logMessage: "x",
++    });
++    const body = await res.json();
++
++    expect(res.status).toBe(500);
++    expect(body.code).toBe("INTERNAL_ERROR");
++  });
++
++  test("handles non-Error thrown values without leaking their content unexpectedly", async () => {
++    const res = sanitizedErrorResponse("a raw string throw with /etc/passwd", {
++      requestId: "req-7",
++      status: 500,
++      logMessage: "x",
++    });
++    const body = await res.json();
++
++    expect(JSON.stringify(body)).not.toContain("/etc/passwd");
++  });
++});
+diff --git a/tests/batch-build.test.ts b/tests/batch-build.test.ts
+index fff5826..fb35a2b 100644
+--- a/tests/batch-build.test.ts
++++ b/tests/batch-build.test.ts
+@@ -145,3 +145,70 @@ describe("POST /api/batch-build — omitted rows (#510)", () => {
+     expect(json.omittedRows).toEqual([1]);
+   });
+ });
++
++describe("POST /api/batch-build — sanitized error responses (#748)", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++  });
++
++  test("a forced Horizon/loadAccount failure never leaks error.message or a stack trace", async () => {
++    const { POST } = await import("@/app/api/batch-build/route");
++
++    const sensitiveMessage =
++      "getaddrinfo ENOTFOUND horizon-internal.batchpay.svc.cluster.local";
++    mockLoadAccount.mockImplementation(() =>
++      Promise.reject(new Error(sensitiveMessage)),
++    );
++
++    const owner = Keypair.random().publicKey();
++    const recipient = Keypair.random().publicKey();
++    const payments: PaymentInstruction[] = [
++      { address: recipient, amount: "1", asset: "XLM", rowIndex: 0 },
++    ];
++
++    const response = await POST(
++      makeRequest({ payments, network: "testnet", publicKey: owner }) as never,
++    );
++    const body = await response.json();
++
++    expect(response.status).toBe(500);
++    expect(body.code).toBe("INTERNAL_ERROR");
++    expect(typeof body.requestId).toBe("string");
++    expect(body.requestId.length).toBeGreaterThan(0);
++
++    const raw = JSON.stringify(body);
++    expect(raw).not.toContain("ENOTFOUND");
++    expect(raw).not.toContain("batchpay.svc.cluster.local");
++    expect(raw).not.toContain(".ts:");
++    expect(body).not.toHaveProperty("stack");
++  });
++
++  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
++    const { POST } = await import("@/app/api/batch-build/route");
++
++    mockLoadAccount.mockImplementation(() =>
++      Promise.reject(new Error("boom")),
++    );
++
++    const owner = Keypair.random().publicKey();
++    const recipient = Keypair.random().publicKey();
++    const payments: PaymentInstruction[] = [
++      { address: recipient, amount: "1", asset: "XLM", rowIndex: 0 },
++    ];
++
++    const req = new Request("http://localhost/api/batch-build", {
++      method: "POST",
++      headers: {
++        "content-type": "application/json",
++        "x-request-id": "trace-build-1",
++      },
++      body: JSON.stringify({ payments, network: "testnet", publicKey: owner }),
++    });
++
++    const response = await POST(req as never);
++    const body = await response.json();
++
++    expect(response.status).toBe(500);
++    expect(body.requestId).toBe("trace-build-1");
++  });
++});
+diff --git a/tests/batch-recover.test.ts b/tests/batch-recover.test.ts
+index 3df8503..1e285a1 100644
+--- a/tests/batch-recover.test.ts
++++ b/tests/batch-recover.test.ts
+@@ -6,7 +6,7 @@
+  * publicKey is now required and job lookup is always ownership-scoped.
+  */
+ 
+-import { beforeEach, describe, expect, test } from "vitest";
++import { beforeEach, describe, expect, test, vi } from "vitest";
+ 
+ process.env.JOB_STORE_PATH = ":memory:";
+ 
+@@ -104,4 +104,68 @@ describe("GET /api/batch-recover", () => {
+     expect(body).not.toHaveProperty("successfulTransactions");
+     expect(body).not.toHaveProperty("failedTransactions");
+   });
++
++  test("includes a requestId on the 404 not-found response", async () => {
++    const res = await GET(
++      makeRequest({ jobId: "does-not-exist", publicKey: PUBLIC_KEY }) as never,
++    );
++    const body = await res.json();
++
++    expect(res.status).toBe(404);
++    expect(typeof body.requestId).toBe("string");
++    expect(body.requestId.length).toBeGreaterThan(0);
++  });
++});
++
++describe("GET /api/batch-recover — sanitized error responses (#748)", () => {
++  test("forced throw returns a sanitized body with no leaked internals", async () => {
++    const sensitiveMessage =
++      "ENOENT: no such file or directory, open '/var/data/batch-pay.sqlite'";
++    const jobStore = await import("@/lib/job-store");
++    const getJobSpy = vi
++      .spyOn(jobStore, "getJob")
++      .mockRejectedValueOnce(new Error(sensitiveMessage));
++
++    const res = await GET(
++      makeRequest({ jobId: "some-job", publicKey: PUBLIC_KEY }) as never,
++    );
++    const body = await res.json();
++
++    expect(res.status).toBe(500);
++    expect(body.success).toBe(false);
++    expect(body.code).toBe("INTERNAL_ERROR");
++    expect(typeof body.requestId).toBe("string");
++    expect(body.requestId.length).toBeGreaterThan(0);
++
++    const raw = JSON.stringify(body);
++    expect(raw).not.toContain("ENOENT");
++    expect(raw).not.toContain("/var/data");
++    expect(raw).not.toContain("batch-pay.sqlite");
++    expect(raw).not.toContain(".ts:");
++    expect(body).not.toHaveProperty("stack");
++
++    getJobSpy.mockRestore();
++  });
++
++  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
++    const jobStore = await import("@/lib/job-store");
++    const getJobSpy = vi
++      .spyOn(jobStore, "getJob")
++      .mockRejectedValueOnce(new Error("boom"));
++
++    const url = new URL("http://localhost/api/batch-recover");
++    url.searchParams.set("jobId", "some-job");
++    url.searchParams.set("publicKey", PUBLIC_KEY);
++    const req = new Request(url.toString(), {
++      headers: { "x-request-id": "trace-abc-123" },
++    });
++
++    const res = await GET(req as never);
++    const body = await res.json();
++
++    expect(res.status).toBe(500);
++    expect(body.requestId).toBe("trace-abc-123");
++
++    getJobSpy.mockRestore();
++  });
+ });
+diff --git a/tests/batch-retry.test.ts b/tests/batch-retry.test.ts
+index 0a0cc6d..ad870e5 100644
+--- a/tests/batch-retry.test.ts
++++ b/tests/batch-retry.test.ts
+@@ -155,7 +155,7 @@ if (typeof globalThis !== "undefined" && !(globalThis as any).FileReaderSync) {
+   };
+ }
+ 
+-import { createJob, updateJob, getJob } from "@/lib/job-store";
++import { createJob, updateJob, getJob, createIdempotentJob } from "@/lib/job-store";
+ import { POST } from "@/app/api/batch-retry/route";
+ import type { BatchResult, PaymentInstruction } from "@/lib/stellar/types";
+ import { parseFileStream } from "@/lib/stellar/parser";
+@@ -427,3 +427,58 @@ describe("POST /api/batch-retry (#388)", () => {
+     expect(body.error).toMatch(/Horizon reconciliation is pending/i);
+   });
+ });
++
++describe("POST /api/batch-retry — sanitized error responses (#748)", () => {
++  let jobId: string;
++
++  beforeEach(async () => {
++    jobId = await createJob(payments, "testnet", OWNER);
++    await updateJob(jobId, { status: "completed", result: completedResult });
++  });
++
++  afterEach(() => {
++    vi.clearAllMocks();
++  });
++
++  test("a forced unexpected failure never leaks error.message or a stack trace", async () => {
++    const sensitiveMessage =
++      "EACCES: permission denied, open '/etc/stellar/server-signing-key'";
++    vi.mocked(createIdempotentJob).mockImplementationOnce(() => {
++      throw new Error(sensitiveMessage);
++    });
++
++    const res = await POST(
++      makeRequest({ jobId, publicKey: OWNER }) as never,
++    );
++    const body = await res.json();
++
++    expect(res.status).toBe(500);
++    expect(body.code).toBe("INTERNAL_ERROR");
++    expect(typeof body.requestId).toBe("string");
++    expect(body.requestId.length).toBeGreaterThan(0);
++
++    const raw = JSON.stringify(body);
++    expect(raw).not.toContain("EACCES");
++    expect(raw).not.toContain("/etc/stellar");
++    expect(raw).not.toContain("server-signing-key");
++    expect(raw).not.toContain(".ts:");
++    expect(body).not.toHaveProperty("stack");
++  });
++
++  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
++    vi.mocked(createIdempotentJob).mockImplementationOnce(() => {
++      throw new Error("boom");
++    });
++
++    const res = await POST(
++      makeRequest(
++        { jobId, publicKey: OWNER },
++        { "x-request-id": "trace-retry-1" },
++      ) as never,
++    );
++    const body = await res.json();
++
++    expect(res.status).toBe(500);
++    expect(body.requestId).toBe("trace-retry-1");
++  });
++});
+diff --git a/tests/batch-submit-signed.test.ts b/tests/batch-submit-signed.test.ts
+new file mode 100644
+index 0000000..306a1fc
+--- /dev/null
++++ b/tests/batch-submit-signed.test.ts
+@@ -0,0 +1,146 @@
++/**
++ * Tests for POST /api/batch-submit-signed error handling (#748).
++ *
++ * The route previously forwarded raw `error.message` (and ad hoc-extracted
++ * Horizon `result_codes`) straight to the client on any unclassified
++ * submission failure. Classified Horizon failures (bad sequence, insufficient
++ * fee) already return curated, safe messages and are unaffected by this fix;
++ * this file focuses on the previously-leaking generic/unknown-error path.
++ */
++
++import { describe, test, expect, vi, beforeEach } from "vitest";
++import {
++  Account,
++  Asset,
++  BASE_FEE,
++  Keypair,
++  Networks,
++  Operation,
++  TransactionBuilder,
++} from "stellar-sdk";
++
++const { mockSubmitTransaction } = vi.hoisted(() => ({
++  mockSubmitTransaction: vi.fn(),
++}));
++
++vi.mock("stellar-sdk", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("stellar-sdk")>();
++  class MockServer {
++    serverURL = "https://horizon-testnet.stellar.org";
++    submitTransaction = mockSubmitTransaction;
++  }
++  return {
++    ...actual,
++    Horizon: { ...actual.Horizon, Server: MockServer },
++  };
++});
++
++vi.mock("@/lib/api-rate-limit", () => ({
++  applyRateLimit: vi.fn(() => ({ blocked: false, response: undefined })),
++  setRateLimitHeaders: vi.fn((response: Response) => response),
++}));
++
++function buildSignedXdr(source: Keypair): string {
++  const account = new Account(source.publicKey(), "0");
++  const tx = new TransactionBuilder(account, {
++    fee: BASE_FEE,
++    networkPassphrase: Networks.TESTNET,
++  })
++    .addOperation(
++      Operation.payment({
++        destination: Keypair.random().publicKey(),
++        asset: Asset.native(),
++        amount: "1",
++      }),
++    )
++    .setTimeout(30)
++    .build();
++  tx.sign(source);
++  return tx.toXDR();
++}
++
++function makeRequest(body: unknown, headers?: Record<string, string>) {
++  return new Request("http://localhost/api/batch-submit-signed", {
++    method: "POST",
++    headers: { "content-type": "application/json", ...headers },
++    body: JSON.stringify(body),
++  });
++}
++
++describe("POST /api/batch-submit-signed — sanitized error responses (#748)", () => {
++  beforeEach(() => {
++    mockSubmitTransaction.mockReset();
++  });
++
++  test("an unclassified submission failure never leaks error.message or a stack trace", async () => {
++    const { POST } = await import("@/app/api/batch-submit-signed/route");
++
++    const sensitiveMessage =
++      "connect ETIMEDOUT 10.20.30.40:443 (horizon-internal-lb)";
++    mockSubmitTransaction.mockRejectedValue(new Error(sensitiveMessage));
++
++    const source = Keypair.random();
++    const signedXdr = buildSignedXdr(source);
++
++    const res = await POST(
++      makeRequest({ signedXdr, network: "testnet" }) as never,
++    );
++    const body = await res.json();
++
++    expect(res.status).toBe(400);
++    expect(body.success).toBe(false);
++    expect(body.code).toBe("BAD_REQUEST");
++    expect(typeof body.requestId).toBe("string");
++    expect(body.requestId.length).toBeGreaterThan(0);
++
++    const raw = JSON.stringify(body);
++    expect(raw).not.toContain("ETIMEDOUT");
++    expect(raw).not.toContain("10.20.30.40");
++    expect(raw).not.toContain("horizon-internal-lb");
++    expect(raw).not.toContain(".ts:");
++    expect(body).not.toHaveProperty("stack");
++  });
++
++  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
++    const { POST } = await import("@/app/api/batch-submit-signed/route");
++
++    mockSubmitTransaction.mockRejectedValue(new Error("boom"));
++
++    const source = Keypair.random();
++    const signedXdr = buildSignedXdr(source);
++
++    const res = await POST(
++      makeRequest(
++        { signedXdr, network: "testnet" },
++        { "x-request-id": "trace-submit-signed-1" },
++      ) as never,
++    );
++    const body = await res.json();
++
++    expect(res.status).toBe(400);
++    expect(body.requestId).toBe("trace-submit-signed-1");
++  });
++
++  test("a classified Horizon tx_bad_seq failure keeps its curated message and code (unaffected by sanitization)", async () => {
++    const { POST } = await import("@/app/api/batch-submit-signed/route");
++
++    mockSubmitTransaction.mockRejectedValue({
++      response: {
++        data: { extras: { result_codes: { transaction: "tx_bad_seq" } } },
++      },
++    });
++
++    const source = Keypair.random();
++    const signedXdr = buildSignedXdr(source);
++
++    const res = await POST(
++      makeRequest({ signedXdr, network: "testnet" }) as never,
++    );
++    const body = await res.json();
++
++    expect(res.status).toBe(400);
++    expect(body.code).toBe("BAD_SEQ");
++    expect(body.action).toBe("rebuild");
++    expect(body.error).toMatch(/sequence/i);
++  });
++});
+diff --git a/tests/batch-submit.test.ts b/tests/batch-submit.test.ts
+index 07a9930..4742c7f 100644
+--- a/tests/batch-submit.test.ts
++++ b/tests/batch-submit.test.ts
+@@ -514,4 +514,62 @@ describe("POST /api/batch-submit server-signing auth (#696)", () => {
+     expect(response.status).toBe(202);
+     expect(mockProcessJobInBackground).toHaveBeenCalledTimes(1);
+   });
++});
++
++describe("POST /api/batch-submit — sanitized error responses (#748)", () => {
++  test("a forced unexpected failure never leaks error.message or a stack trace", async () => {
++    const sensitiveMessage =
++      "connect ECONNREFUSED /var/run/postgres/.s.PGSQL.5432";
++    mockCreateIdempotentJob.mockImplementationOnce(() => {
++      throw new Error(sensitiveMessage);
++    });
++
++    const response = await POST(
++      makeRequest(baseBody, "sanitize-test-key") as never,
++    );
++    const body = await response.json();
++
++    expect(response.status).toBe(500);
++    expect(body.code).toBe("INTERNAL_ERROR");
++    expect(typeof body.requestId).toBe("string");
++    expect(body.requestId.length).toBeGreaterThan(0);
++
++    const raw = JSON.stringify(body);
++    expect(raw).not.toContain("ECONNREFUSED");
++    expect(raw).not.toContain("/var/run/postgres");
++    expect(raw).not.toContain(".ts:");
++    expect(body).not.toHaveProperty("stack");
++  });
++
++  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
++    mockCreateIdempotentJob.mockImplementationOnce(() => {
++      throw new Error("boom");
++    });
++
++    const response = await POST(
++      makeRequest(baseBody, "sanitize-test-key-2", {
++        "x-request-id": "trace-submit-1",
++      }) as never,
++    );
++    const body = await response.json();
++
++    expect(response.status).toBe(500);
++    expect(body.requestId).toBe("trace-submit-1");
++  });
++
++  test("an idempotency conflict (409) still includes a requestId but keeps its curated message", async () => {
++    const idempotencyKey = "conflict-key";
++    await POST(makeRequest(baseBody, idempotencyKey) as never);
++
++    const conflictingBody = { ...baseBody, signedTransactions: ["BBBB"] };
++    const response = await POST(
++      makeRequest(conflictingBody, idempotencyKey) as never,
++    );
++    const body = await response.json();
++
++    expect(response.status).toBe(409);
++    expect(body.code).toBe("CONFLICT");
++    expect(typeof body.requestId).toBe("string");
++    expect(body.error).toMatch(/idempotency key/i);
++  });
+ });
+\ No newline at end of file
+diff --git a/tests/tx-status.test.ts b/tests/tx-status.test.ts
+index 1fa7393..9b74c98 100644
+--- a/tests/tx-status.test.ts
++++ b/tests/tx-status.test.ts
+@@ -2,7 +2,25 @@
+  * Test suite for transaction status query validation
+  */
+ 
+-import { describe, test, expect } from "vitest";
++import { describe, test, expect, vi, beforeEach } from "vitest";
++import { NextRequest } from "next/server";
++
++const { mockTransaction } = vi.hoisted(() => ({
++  mockTransaction: vi.fn(),
++}));
++
++vi.mock("stellar-sdk", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("stellar-sdk")>();
++  class MockServer {
++    transactions() {
++      return { transaction: mockTransaction };
++    }
++  }
++  return {
++    ...actual,
++    Horizon: { ...actual.Horizon, Server: MockServer },
++  };
++});
+ 
+ describe("Transaction status query parameters", () => {
+   test("valid hash format is a 64-character hex string", () => {
+@@ -40,3 +58,56 @@ describe("Transaction status query parameters", () => {
+     expect(url).toBe("https://horizon.stellar.org");
+   });
+ });
++
++describe("GET /api/tx-status — sanitized error responses (#748)", () => {
++  beforeEach(() => {
++    mockTransaction.mockReset();
++  });
++
++  function makeRequest(hash: string, network = "testnet") {
++    const url = new URL("http://localhost/api/tx-status");
++    url.searchParams.set("hash", hash);
++    url.searchParams.set("network", network);
++    return new NextRequest(url.toString());
++  }
++
++  test("a non-404 Horizon failure never leaks error.message or a stack trace", async () => {
++    const { GET } = await import("@/app/api/tx-status/route");
++
++    const sensitiveMessage =
++      "connect ECONNREFUSED 10.0.4.12:11626 (internal horizon replica)";
++    mockTransaction.mockReturnValue({
++      call: vi.fn().mockRejectedValue(new Error(sensitiveMessage)),
++    });
++
++    const res = await GET(makeRequest("a".repeat(64)) as never);
++    const body = await res.json();
++
++    expect(res.status).toBe(500);
++    expect(body.code).toBe("INTERNAL_ERROR");
++    expect(typeof body.requestId).toBe("string");
++    expect(body.requestId.length).toBeGreaterThan(0);
++
++    const raw = JSON.stringify(body);
++    expect(raw).not.toContain("ECONNREFUSED");
++    expect(raw).not.toContain("10.0.4.12");
++    expect(raw).not.toContain("internal horizon replica");
++    expect(body).not.toHaveProperty("stack");
++  });
++
++  test("a genuine 404 (transaction not found) is unaffected by sanitization", async () => {
++    const { GET } = await import("@/app/api/tx-status/route");
++
++    mockTransaction.mockReturnValue({
++      call: vi
++        .fn()
++        .mockRejectedValue({ response: { status: 404 } }),
++    });
++
++    const res = await GET(makeRequest("b".repeat(64)) as never);
++    const body = await res.json();
++
++    expect(res.status).toBe(200);
++    expect(body.found).toBe(false);
++  });
++});

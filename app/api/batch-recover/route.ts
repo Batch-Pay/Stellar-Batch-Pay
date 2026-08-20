@@ -13,15 +13,18 @@ import { StrKey } from "stellar-sdk";
 import { getJob } from "@/lib/job-store";
 import { safeJsonResponse } from "@/lib/safe-json";
 import { requireWalletAuth } from "@/lib/wallet-auth";
+import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
 
 export async function GET(request: NextRequest) {
+  const requestId = getRequestId(request);
+
   try {
     const { searchParams } = new URL(request.url);
     const jobId = searchParams.get("jobId");
 
     if (!jobId || typeof jobId !== "string") {
       return NextResponse.json(
-        { error: "jobId is required" },
+        { error: "jobId is required", code: "BAD_REQUEST", requestId },
         { status: 400 },
       );
     }
@@ -29,7 +32,7 @@ export async function GET(request: NextRequest) {
     const publicKey = searchParams.get("publicKey");
     if (!publicKey) {
       return NextResponse.json(
-        { error: "publicKey is required" },
+        { error: "publicKey is required", code: "BAD_REQUEST", requestId },
         { status: 400 },
       );
     }
@@ -57,6 +60,8 @@ export async function GET(request: NextRequest) {
       return safeJsonResponse(
         {
           error: "Batch not found or not completed yet",
+          code: "NOT_FOUND",
+          requestId,
           jobId,
         },
         { status: 404 },
@@ -89,17 +94,11 @@ export async function GET(request: NextRequest) {
       ready: failedTransactions.length > 0,
     });
   } catch (error: unknown) {
-    console.error("Batch recovery error:", error);
-
-    return safeJsonResponse(
-      {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to recover batch information",
-      },
-      { status: 500 },
-    );
+    return sanitizedErrorResponse(error, {
+      requestId,
+      status: 500,
+      logMessage: "Batch recovery error",
+      extraFields: { success: false },
+    });
   }
 }

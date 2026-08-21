@@ -14,6 +14,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { Horizon, StrKey } from "stellar-sdk";
 import { horizonUrl } from "@/lib/stellar/network-config";
 import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
+import { countJobs } from "@/lib/job-store";
+import type { BatchJobNetwork } from "@/lib/stellar/types";
 
 type TimeRange = "7d" | "30d" | "90d";
 
@@ -146,21 +148,24 @@ export async function GET(request: NextRequest) {
     // Calculate success rate
     const successRate = totalPayments > 0 ? (successfulPayments / totalPayments) * 100 : 0;
 
-    // Active batches: rough estimate based on recent activity
-    // Group payments by time windows (e.g., last 24 hours)
-    let recentPayments = 0;
+    // Active batches: query the durable job store for queued + processing jobs
+    // scoped to the requesting owner and network.
+    const activeBatches =
+      countJobs({ status: "queued", network: network as BatchJobNetwork, publicKey }) +
+      countJobs({ status: "processing", network: network as BatchJobNetwork, publicKey });
+
+    // Preserve the ledger-activity signal: count recent on-chain payments over 24h
+    // as a separate field. Do NOT derive activeBatches from this.
+    let paymentsLast24h = 0;
 
     for (const op of allRecords) {
       if (op.type === "payment" && op.source_account === publicKey) {
         const opTime = new Date(op.created_at).getTime();
         if (opTime > oneDayAgo) {
-          recentPayments += 1;
+          paymentsLast24h += 1;
         }
       }
     }
-
-    // Estimate active batches from recent activity without inventing activity for empty accounts.
-    const activeBatches = recentPayments > 0 ? Math.max(1, Math.floor(recentPayments / 10)) : 0;
 
     // Format total amount (prioritize XLM, otherwise show asset breakdown)
     let totalAmountDisplay = "";
@@ -208,6 +213,7 @@ export async function GET(request: NextRequest) {
         totalAmountSent: totalAmountDisplay,
         successRate: successRate.toFixed(1) + "%",
         activeBatches,
+        paymentsLast24h,
         totalPaymentsTrend: formatTrend(currentWindowPayments, previousWindowPayments),
         totalAmountSentTrend: formatTrend(currentWindowAmount, previousWindowAmount),
         successRateTrend: formatTrend(
@@ -215,7 +221,7 @@ export async function GET(request: NextRequest) {
           rate(previousWindowSuccessful, previousWindowPayments),
           "pp",
         ),
-        activeBatchesTrend: recentPayments > 0 ? "Last 24h" : "No active batches",
+        activeBatchesTrend: activeBatches > 0 ? "Active" : "No active batches",
         truncated,
         ...(timeSeries && { timeSeries }),
       }),

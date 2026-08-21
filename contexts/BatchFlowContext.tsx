@@ -198,6 +198,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
     }
   }, [handleRestore]);
 
+
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -365,6 +366,22 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
       "Loaded failed payments for retry. Review before resubmitting.",
     );
   }, []);
+
+  useEffect(() => {
+    const savedFailed = sessionStorage.getItem("retry_failed_payments");
+    if (savedFailed) {
+      try {
+        const parsed = JSON.parse(savedFailed);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          handleRetryFailed(parsed);
+        }
+      } catch (e) {
+        console.error("Failed to restore retry_failed_payments:", e);
+      } finally {
+        sessionStorage.removeItem("retry_failed_payments");
+      }
+    }
+  }, [handleRetryFailed]);
 
   const handleFileSelect = useCallback(async (
     selectedFile: File,

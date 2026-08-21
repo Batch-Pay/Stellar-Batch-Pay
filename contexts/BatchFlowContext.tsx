@@ -97,7 +97,7 @@ interface BatchFlowContextType {
   // Actions
   onSkipToggle: (index: number) => void;
   onConvertToggle: (index: number) => void;
-  handleRetryFailed: (failedPayments: UploadedPaymentInstruction[]) => void;
+  handleRetryFailed: (failedPayments: PaymentInstruction[]) => void;
   handleFileSelect: (selectedFile: File, format: "json" | "csv") => Promise<void>;
   handleManualContinue: () => void;
   loadBatchMeta: (payments: PaymentInstruction[]) => Promise<void>;
@@ -346,8 +346,13 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const handleRetryFailed = useCallback((failedPayments: UploadedPaymentInstruction[]) => {
-    const rows = failedPayments.map((instruction, index) => ({
+  const handleRetryFailed = useCallback((failedPayments: PaymentInstruction[]) => {
+    const uploadedPayments: UploadedPaymentInstruction[] = failedPayments.map((p, idx) => ({
+      ...p,
+      rowIndex: p.rowIndex ?? (idx + 1),
+    }));
+
+    const rows = uploadedPayments.map((instruction, index) => ({
       rowNumber: index + 1,
       instruction,
       valid: true,
@@ -355,10 +360,10 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
 
     setValidationResult({
       rows,
-      validPayments: failedPayments,
+      validPayments: uploadedPayments,
       invalidCount: 0,
     });
-    setSummary(getBatchSummary(failedPayments));
+    setSummary(getBatchSummary(uploadedPayments));
     setSkippedIndices([]);
     setConvertedIndices([]);
     setStep(2);

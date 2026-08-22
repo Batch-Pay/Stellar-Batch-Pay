@@ -21,8 +21,13 @@ vi.mock('stellar-sdk', async (importOriginal) => {
 
   class MockTransactionBuilder {
     operations: unknown[] = [];
+    fee: string = '100';
 
-    constructor(_sourceAccount: unknown, _options: unknown) {}
+    constructor(_sourceAccount: unknown, options: any) {
+      if (options && options.fee) {
+        this.fee = options.fee;
+      }
+    }
 
     addMemo(_memo: unknown) {
       return this;
@@ -46,6 +51,7 @@ vi.mock('stellar-sdk', async (importOriginal) => {
         sign: vi.fn(),
         hash: () => Buffer.from('mock-transaction-hash'),
         toEnvelope: () => envelope,
+        fee: this.fee,
       };
     }
   }
@@ -522,5 +528,47 @@ describe('StellarService.submitSingleBatch — tx_bad_seq retry (worker path) (#
     expect(mockGetTransaction).toHaveBeenCalledTimes(1);
     expect(result.totalTransactions).toBe(1);
     expect(result.results[0].status).toBe('success');
+  });
+
+  test('submitSingleBatch retries with increased fee on tx_insufficient_fee and succeeds', async () => {
+    mockLoadAccount.mockResolvedValue(new Account(SOURCE_KEYPAIR.publicKey(), '1'));
+
+    const txInsufficientFeeError = {
+      response: {
+        data: {
+          extras: {
+            result_codes: {
+              transaction: 'tx_insufficient_fee',
+            },
+          },
+        },
+      },
+      message: 'tx_insufficient_fee',
+    };
+
+    mockSubmitTransaction
+      .mockRejectedValueOnce(txInsufficientFeeError)
+      .mockResolvedValueOnce({ hash: 'mock-tx-hash-fee-bumped' });
+
+    const { StellarService } = await import('../lib/stellar/server');
+    const service = new StellarService({
+      secretKey: SOURCE_KEYPAIR.secret(),
+      network: 'testnet',
+      maxOperationsPerTransaction: 100,
+    });
+
+    const result = await service.submitSingleBatch([
+      { address: RECIPIENT_1, amount: '10.0000000', asset: 'XLM' },
+    ]);
+
+    expect(mockSubmitTransaction).toHaveBeenCalledTimes(2);
+    expect(result.summary.successful).toBe(1);
+    expect(result.results[0].status).toBe('success');
+    expect(result.results[0].transactionHash).toBe('mock-tx-hash-fee-bumped');
+
+    const firstCallTx = mockSubmitTransaction.mock.calls[0][0];
+    const secondCallTx = mockSubmitTransaction.mock.calls[1][0];
+    expect(firstCallTx.fee).toBe('100');
+    expect(secondCallTx.fee).toBe('200');
   });
 });

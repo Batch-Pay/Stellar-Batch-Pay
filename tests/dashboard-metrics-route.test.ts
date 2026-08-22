@@ -97,7 +97,7 @@ describe("GET /api/dashboard-metrics — activeBatches job-store integration", (
     const { GET } = await import("@/app/api/dashboard-metrics/route");
     const publicKeyA = Keypair.random().publicKey();
 
-    createJob([], "testnet", publicKeyA);
+    await createJob([], "testnet", publicKeyA);
     mockOperations.call.mockResolvedValue(makeHorizonPages([[]]));
 
     const res = await GET(makeRequest({ publicKey: publicKeyA, network: "testnet" }));
@@ -113,8 +113,8 @@ describe("GET /api/dashboard-metrics — activeBatches job-store integration", (
     const { GET } = await import("@/app/api/dashboard-metrics/route");
     const publicKeyA = Keypair.random().publicKey();
 
-    const jobId = createJob([], "testnet", publicKeyA);
-    updateJob(jobId, { status: "completed" });
+    const jobId = await createJob([], "testnet", publicKeyA);
+    await updateJob(jobId, { status: "completed" });
 
     mockOperations.call.mockResolvedValue(
       makeHorizonPages([[makePaymentRecord(new Date(Date.now() - 3600000).toISOString(), publicKeyA)]]),
@@ -133,8 +133,8 @@ describe("GET /api/dashboard-metrics — activeBatches job-store integration", (
     const { GET } = await import("@/app/api/dashboard-metrics/route");
     const publicKeyA = Keypair.random().publicKey();
 
-    const jobId = createJob([], "testnet", publicKeyA);
-    updateJob(jobId, { status: "completed" });
+    const jobId = await createJob([], "testnet", publicKeyA);
+    await updateJob(jobId, { status: "completed" });
 
     mockOperations.call.mockResolvedValue(
       makeHorizonPages([
@@ -157,7 +157,7 @@ describe("GET /api/dashboard-metrics — activeBatches job-store integration", (
     const publicKeyA = Keypair.random().publicKey();
     const publicKeyB = Keypair.random().publicKey();
 
-    createJob([], "testnet", publicKeyB);
+    await createJob([], "testnet", publicKeyB);
 
     mockOperations.call.mockResolvedValue(makeHorizonPages([[]]));
 
@@ -173,7 +173,7 @@ describe("GET /api/dashboard-metrics — activeBatches job-store integration", (
     const { GET } = await import("@/app/api/dashboard-metrics/route");
     const publicKeyA = Keypair.random().publicKey();
 
-    createJob([], "mainnet", publicKeyA);
+    await createJob([], "mainnet", publicKeyA);
 
     mockOperations.call.mockResolvedValue(makeHorizonPages([[]]));
 
@@ -189,9 +189,9 @@ describe("GET /api/dashboard-metrics — activeBatches job-store integration", (
     const { GET } = await import("@/app/api/dashboard-metrics/route");
     const publicKeyA = Keypair.random().publicKey();
 
-    createJob([], "testnet", publicKeyA);
-    const processingJobId = createJob([], "testnet", publicKeyA);
-    updateJob(processingJobId, { status: "processing" });
+    await createJob([], "testnet", publicKeyA);
+    const processingJobId = await createJob([], "testnet", publicKeyA);
+    await updateJob(processingJobId, { status: "processing" });
 
     mockOperations.call.mockResolvedValue(makeHorizonPages([[]]));
 
@@ -207,8 +207,8 @@ describe("GET /api/dashboard-metrics — activeBatches job-store integration", (
     const { GET } = await import("@/app/api/dashboard-metrics/route");
     const publicKeyA = Keypair.random().publicKey();
 
-    const jobId = createJob([], "testnet", publicKeyA);
-    updateJob(jobId, { status: "failed" });
+    const jobId = await createJob([], "testnet", publicKeyA);
+    await updateJob(jobId, { status: "failed" });
 
     mockOperations.call.mockResolvedValue(makeHorizonPages([[]]));
 

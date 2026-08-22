@@ -151,8 +151,8 @@ export async function GET(request: NextRequest) {
     // Active batches: query the durable job store for queued + processing jobs
     // scoped to the requesting owner and network.
     const activeBatches =
-      countJobs({ status: "queued", network: network as BatchJobNetwork, publicKey }) +
-      countJobs({ status: "processing", network: network as BatchJobNetwork, publicKey });
+      (await countJobs({ status: "queued", network: network as BatchJobNetwork, publicKey })) +
+      (await countJobs({ status: "processing", network: network as BatchJobNetwork, publicKey }));
 
     // Preserve the ledger-activity signal: count recent on-chain payments over 24h
     // as a separate field. Do NOT derive activeBatches from this.

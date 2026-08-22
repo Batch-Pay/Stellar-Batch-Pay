@@ -265,3 +265,25 @@ describe('Issue #608: dashboard notification formatting', () => {
     });
   });
 });
+
+// Test #735: Insufficient fee retry and sessionStorage validation
+describe('Issue #735: Insufficient fee retry and sessionStorage validation', () => {
+  test('validatePaymentInstruction is exported and behaves correctly', async () => {
+    const { validatePaymentInstruction } = await import('../lib/stellar/validator');
+    const { Keypair } = await import('stellar-sdk');
+    
+    const validResult = validatePaymentInstruction({
+      address: Keypair.random().publicKey(),
+      amount: '100',
+      asset: 'XLM',
+    });
+    expect(validResult.valid).toBe(true);
+
+    const invalidResult = validatePaymentInstruction({
+      address: '',
+      amount: '100',
+      asset: 'XLM',
+    });
+    expect(invalidResult.valid).toBe(false);
+  });
+});

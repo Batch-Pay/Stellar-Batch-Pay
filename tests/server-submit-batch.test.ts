@@ -568,7 +568,7 @@ describe('StellarService.submitSingleBatch — tx_bad_seq retry (worker path) (#
 
     const firstCallTx = mockSubmitTransaction.mock.calls[0][0];
     const secondCallTx = mockSubmitTransaction.mock.calls[1][0];
-    expect(firstCallTx.fee).toBe('NaN');
+    expect(firstCallTx.fee).toBe('100');
     expect(secondCallTx.fee).toBe('200');
   });
 });

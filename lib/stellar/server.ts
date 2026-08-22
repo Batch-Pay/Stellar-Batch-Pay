@@ -285,7 +285,7 @@ export class StellarService {
     let sourceAccount = initialSourceAccount;
     let badSeqRetries = 0;
     let feeRetries = 0;
-    let currentFee = fee;
+    let currentFee = Number.isNaN(fee) || fee <= 0 ? 100 : fee;
     let outcome;
 
     while (true) {

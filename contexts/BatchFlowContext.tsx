@@ -8,6 +8,7 @@ import { useNotifications } from "@/contexts/NotificationsContext";
 import { batchHistoryKeys, dashboardMetricsKeys } from "@/lib/query-keys";
 import { parsePaymentFile, analyzeParsedPayments } from "@/lib/stellar/parser";
 import { getBatchSummary } from "@/lib/stellar/summary";
+import { validatePaymentInstruction } from "@/lib/stellar/validator";
 import { canonicalizeIdempotencyPayload } from "@/lib/idempotency";
 import { authenticatedFetch } from "@/lib/wallet-session-client";
 import { useOptionalWalletSession } from "@/contexts/WalletSessionContext";
@@ -347,7 +348,25 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const handleRetryFailed = useCallback((failedPayments: PaymentInstruction[]) => {
-    const uploadedPayments: UploadedPaymentInstruction[] = failedPayments.map((p, idx) => ({
+    const validPayments = failedPayments.filter((p) => {
+      try {
+        return validatePaymentInstruction(p).valid;
+      } catch {
+        return false;
+      }
+    });
+
+    const droppedCount = failedPayments.length - validPayments.length;
+    if (droppedCount > 0) {
+      toast.warning(`Dropped ${droppedCount} invalid payment instruction(s) from retry list.`);
+    }
+
+    if (validPayments.length === 0) {
+      toast.error("No valid payments found to retry.");
+      return;
+    }
+
+    const uploadedPayments: UploadedPaymentInstruction[] = validPayments.map((p, idx) => ({
       ...p,
       rowIndex: p.rowIndex ?? (idx + 1),
     }));

@@ -9,6 +9,7 @@ import {
   registerWebhook,
   unregisterWebhook,
   triggerWebhooksWithRetry,
+  WEBHOOK_TIMEOUT_MS,
 } from "../lib/webhooks";
 
 // ---------------------------------------------------------------------------
@@ -130,6 +131,33 @@ describe("triggerWebhooksWithRetry (#338)", () => {
     // MAX_RETRIES = 4, so total attempts = 5 (initial + 4 retries)
     expect(callCount).toBe(5);
   }, 30_000);
+
+  test("aborts and retries a delayed delivery at the webhook timeout", async () => {
+    let abortedSignal: AbortSignal | undefined;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_input, init) => {
+        abortedSignal = init?.signal ?? undefined;
+        await new Promise<never>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
+      },
+    );
+    const reg = registerWebhook("http://delayed.test", ["batch.completed"]);
+    webhookId = reg.id;
+
+    const startedAt = Date.now();
+    await triggerWebhooksWithRetry("batch.completed", { jobId: "job-timeout" }, "job-timeout");
+
+    expect(abortedSignal?.aborted).toBe(true);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(WEBHOOK_TIMEOUT_MS - 250);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
+    fetchSpy.mockRestore();
+  }, 45_000);
 
   test("delivers to wildcard (*) subscriptions", async () => {
     const received: string[] = [];

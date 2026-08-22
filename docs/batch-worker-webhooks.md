@@ -30,7 +30,7 @@ The top-level `catch` block in `processJobInBackground` handles unrecoverable er
 
 ## Retry Semantics
 
-`triggerWebhooksWithRetry` provides exponential backoff (500ms base) and retries on 5xx / network errors up to 4 additional attempts. It also logs every delivery attempt to the `webhook_deliveries` table for auditing.
+`triggerWebhooksWithRetry` aborts each delivery attempt after 5 seconds, provides exponential backoff (500ms base), and retries on 5xx / network errors, including timeout failures, up to 4 additional attempts. It also logs every delivery attempt to the `webhook_deliveries` table for auditing.
 
 ## Webhook Payload Schema
 

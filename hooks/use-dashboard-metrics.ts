@@ -14,6 +14,7 @@ export interface DashboardMetrics {
   totalAmountSent: string;
   successRate: string;
   activeBatches: number;
+  paymentsLast24h?: number;
   totalPaymentsTrend?: string;
   totalAmountSentTrend?: string;
   successRateTrend?: string;
@@ -54,13 +55,14 @@ export function useDashboardMetrics(
 
   const showZeroDefaults = !publicKey;
 
-  return {
+    return {
     metrics: showZeroDefaults
       ? {
           totalPayments: 0,
           totalAmountSent: "0 XLM",
           successRate: "0.0%",
           activeBatches: 0,
+          paymentsLast24h: 0,
         }
       : (metrics ?? null),
     loading: isLoading,

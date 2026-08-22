@@ -26,6 +26,7 @@ describe("Issue #461: useDashboardMetrics behavior", () => {
       totalAmountSent: "0 XLM",
       successRate: "0.0%",
       activeBatches: 0,
+      paymentsLast24h: 0,
     });
     expect(result.loading).toBe(false);
     expect(result.error).toBeNull();
@@ -68,6 +69,7 @@ describe("Issue #461: useDashboardMetrics behavior", () => {
       totalAmountSent: "1500 XLM",
       successRate: "98.5%",
       activeBatches: 2,
+      paymentsLast24h: 5,
     };
 
     vi.mocked(useQuery).mockReturnValue({

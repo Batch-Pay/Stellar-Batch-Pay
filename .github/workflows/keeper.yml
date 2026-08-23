@@ -25,8 +25,41 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      # Install all dependencies (including devDependencies) so that tsx,
+      # which is a devDependency, is available to execute the keeper script.
+      # --only=production was the original bug: it skips devDeps, making
+      # the npx tsx call fail with "command not found".
       - name: Install dependencies
-        run: npm ci --only=production
+        run: npm ci
+
+      # Fail loudly before doing any work if the secrets the keeper needs
+      # are not configured.  An empty CONTRACT_ID means the bot would silently
+      # target no contract; an empty KEEPER_SECRET means it cannot sign txs.
+      - name: Validate required secrets
+        run: |
+          missing=()
+          [[ -z "$CONTRACT_ID"    ]] && missing+=("CONTRACT_ID")
+          [[ -z "$KEEPER_SECRET"  ]] && missing+=("KEEPER_SECRET")
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "ERROR: required secret(s) not set: ${missing[*]}" >&2
+            echo "Set them under Settings → Secrets and variables → Actions." >&2
+            exit 1
+          fi
+        env:
+          CONTRACT_ID: ${{ secrets.CONTRACT_ID }}
+          KEEPER_SECRET: ${{ secrets.KEEPER_SECRET }}
+
+      # Restore the per-recipient pagination cursor from the previous run.
+      # The artifact is keyed on the workflow + contract so different
+      # environments (testnet vs mainnet) never share state.
+      # A cache-miss (first run, or after retention expires) is fine — the
+      # keeper initialises an empty state object and starts from index 0.
+      - name: Restore keeper state
+        uses: actions/download-artifact@v4
+        with:
+          name: keeper-state-${{ secrets.CONTRACT_ID }}
+          path: ./data
+        continue-on-error: true
 
       - name: Run keeper bot
         env:
@@ -35,11 +68,25 @@ jobs:
           SOROBAN_RPC_URL: ${{ secrets.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org' }}
           NETWORK_PASSPHRASE: ${{ secrets.NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015' }}
           CONTRACT_ID: ${{ secrets.CONTRACT_ID }}
-          MAINTENANCE_START_INDEX: ${{ vars.MAINTENANCE_START_INDEX || '0' }}
           MAINTENANCE_LIMIT: ${{ vars.MAINTENANCE_LIMIT || '10' }}
+          KEEPER_STATE_PATH: ./data/keeper-state.json
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           LOW_BALANCE_THRESHOLD: ${{ vars.LOW_BALANCE_THRESHOLD || '50' }}
-        run: npx ts-node scripts/keeper.ts
+        run: npx tsx scripts/keeper.ts
+
+      # Upload the updated state so the next scheduled run can resume
+      # pagination from where this run left off.  The artifact is uploaded
+      # even when the keeper step fails (if: always()) so a transient RPC
+      # error mid-run does not lose the cursor progress that was saved.
+      - name: Upload keeper state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keeper-state-${{ secrets.CONTRACT_ID }}
+          path: ./data/keeper-state.json
+          # Retain for 90 days — well beyond the 6-hour cron cadence.
+          retention-days: 90
+          if-no-files-found: ignore
 
       - name: Report failure
         if: failure()

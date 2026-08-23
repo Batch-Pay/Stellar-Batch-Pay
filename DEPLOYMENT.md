@@ -422,6 +422,7 @@ mounted volume).
 | `JOB_STORE_PATH`     | `./data/jobs.db`       | Durable batch job state   |
 | `RATE_LIMIT_DB_PATH` | `./data/rate-limit.db` | Per-key API rate limiting |
 | `WEBHOOK_ENCRYPTION_KEY` | unset*              | Stable key for encrypting webhook secrets |
+| `WEBHOOK_ADMIN_API_KEY` | unset              | API key required for webhook management and delivery auditing |
 
 Webhook registrations are stored in the same SQLite database as jobs and
 delivery logs. The schema is created automatically by the `job-store`

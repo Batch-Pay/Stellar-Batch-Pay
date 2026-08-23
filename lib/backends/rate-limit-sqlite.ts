@@ -15,6 +15,7 @@ export type EndpointKey =
   | "batch-retry"
   | "batch-recover"
   | "batch-history"
+  | "webhook-deliveries"
   | "health";
 
 export type EndpointLimit = {

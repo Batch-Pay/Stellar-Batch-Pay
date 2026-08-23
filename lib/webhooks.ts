@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { getDb } from "./job-store";
 
 export interface WebhookRegistration {
   id: string;
@@ -249,18 +250,88 @@ export function validateWebhookUrl(rawUrl: string): string | null {
   return null;
 }
 
-// In-memory store for demonstration. In production, this would be a database.
-let webhooks: WebhookRegistration[] = [];
+const WEBHOOK_KEY = crypto
+  .createHash("sha256")
+  .update(
+    process.env.WEBHOOK_ENCRYPTION_KEY ??
+      process.env.AUTH_SECRET ??
+      process.env.NEXTAUTH_SECRET ??
+      "stellar-batch-pay-development-webhook-key",
+  )
+  .digest();
+
+interface WebhookRow {
+  id: string;
+  url: string;
+  events: string;
+  createdAt: string;
+  secretHash: string;
+  secretCiphertext: string;
+}
+
+function encryptSecret(secret: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", WEBHOOK_KEY, iv);
+  const ciphertext = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
+  return [iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ciphertext.toString("base64url")].join(".");
+}
+
+function decryptSecret(ciphertext: string): string {
+  const [ivEncoded, tagEncoded, valueEncoded] = ciphertext.split(".");
+  if (!ivEncoded || !tagEncoded || !valueEncoded) {
+    throw new Error("Invalid webhook secret ciphertext");
+  }
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    WEBHOOK_KEY,
+    Buffer.from(ivEncoded, "base64url"),
+  );
+  decipher.setAuthTag(Buffer.from(tagEncoded, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(valueEncoded, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+
+function rowToWebhook(row: WebhookRow): WebhookRegistration {
+  return {
+    id: row.id,
+    url: row.url,
+    events: JSON.parse(row.events) as string[],
+    createdAt: row.createdAt,
+    secret: decryptSecret(row.secretCiphertext),
+  };
+}
+
+function loadWebhooks(): WebhookRegistration[] {
+  const rows = getDb()
+    .prepare("SELECT id, url, events, createdAt, secretHash, secretCiphertext FROM webhooks ORDER BY createdAt DESC")
+    .all() as WebhookRow[];
+  return rows.map(rowToWebhook);
+}
 
 export function registerWebhook(url: string, events: string[], secret?: string): WebhookRegistration {
+  const resolvedSecret = secret || crypto.randomBytes(32).toString("hex");
   const newWebhook: WebhookRegistration = {
     id: crypto.randomUUID(),
     url,
     events,
     createdAt: new Date().toISOString(),
-    secret: secret || crypto.randomBytes(32).toString('hex'),
+    secret: resolvedSecret,
   };
-  webhooks.push(newWebhook);
+  getDb()
+    .prepare(
+      `INSERT INTO webhooks (id, url, events, createdAt, secretHash, secretCiphertext)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      newWebhook.id,
+      newWebhook.url,
+      JSON.stringify(newWebhook.events),
+      newWebhook.createdAt,
+      crypto.createHash("sha256").update(resolvedSecret).digest("hex"),
+      encryptSecret(resolvedSecret),
+    );
   return newWebhook;
 }
 
@@ -295,18 +366,16 @@ export function verifyWebhookSignature(payload: string, secret: string, signatur
 }
 
 export function unregisterWebhook(id: string): boolean {
-  const initialLength = webhooks.length;
-  webhooks = webhooks.filter((w) => w.id !== id);
-  return webhooks.length < initialLength;
+  return getDb().prepare("DELETE FROM webhooks WHERE id = ?").run(id).changes > 0;
 }
 
 export function getWebhooks(): WebhookRegistration[] {
-  return [...webhooks];
+  return loadWebhooks();
 }
 
 /** Returns webhook list with secrets stripped to a short prefix. */
 export function getWebhooksRedacted(): WebhookRegistrationRedacted[] {
-  return webhooks.map(({ id, url, events, createdAt, secret }) => ({
+  return loadWebhooks().map(({ id, url, events, createdAt, secret }) => ({
     id,
     url,
     events,
@@ -316,7 +385,7 @@ export function getWebhooksRedacted(): WebhookRegistrationRedacted[] {
 }
 
 export async function triggerWebhooks(eventName: string, payload: any) {
-  const targets = webhooks.filter((w) => w.events.includes(eventName) || w.events.includes("*"));
+  const targets = loadWebhooks().filter((w) => w.events.includes(eventName) || w.events.includes("*"));
    
   const results = await Promise.allSettled(
     targets.map(async (webhook) => {
@@ -369,7 +438,7 @@ export async function triggerWebhooksWithRetry(
   // Lazy import to avoid circular dependency at module load time
   const { logWebhookDelivery } = await import("./job-store");
 
-  const targets = webhooks.filter(
+  const targets = loadWebhooks().filter(
     (w) => w.events.includes(eventName) || w.events.includes("*"),
   );
 

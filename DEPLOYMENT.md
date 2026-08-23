@@ -339,6 +339,19 @@ The API stores batch jobs in SQLite via `better-sqlite3`. By default:
 | -------------------- | ---------------------- | ------------------------- |
 | `JOB_STORE_PATH`     | `./data/jobs.db`       | Durable batch job state   |
 | `RATE_LIMIT_DB_PATH` | `./data/rate-limit.db` | Per-key API rate limiting |
+| `WEBHOOK_ENCRYPTION_KEY` | unset*              | Stable key for encrypting webhook secrets |
+
+Webhook registrations are stored in the same SQLite database as jobs and
+delivery logs. The schema is created automatically by the `job-store`
+initialization migration, so existing databases receive the `webhooks` table
+on their next application start. Signing secrets are stored as a SHA-256 hash
+and authenticated ciphertext; plaintext is returned only in the create
+response and is never returned by the list endpoint.
+
+`WEBHOOK_ENCRYPTION_KEY` must be set to the same long, random value in every
+process sharing `JOB_STORE_PATH`. If it is omitted, the application uses the
+configured auth secret when available, or a development fallback. Changing the
+key makes existing webhook secrets undecryptable.
 
 SQLite is configured with:
 - **WAL mode** (Write-Ahead Logging)** for improved read concurrency.

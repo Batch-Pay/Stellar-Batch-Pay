@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'vitest';
-import { verifyWebhookSignature, validateWebhookUrl } from '../lib/webhooks';
+import {
+  getWebhooks,
+  getWebhooksRedacted,
+  registerWebhook,
+  unregisterWebhook,
+  verifyWebhookSignature,
+  validateWebhookUrl,
+} from '../lib/webhooks';
+import { getDb } from '../lib/job-store';
 import crypto from 'crypto';
 
 describe('verifyWebhookSignature (#332)', () => {
@@ -159,5 +167,31 @@ describe('validateWebhookUrl — IP obfuscation blocking (#540)', () => {
   test('rejects dotted-octal 192.168 range (0300.0250.x.x)', () => {
     // 0300 = 192, 0250 = 168 in octal
     expect(validateWebhookUrl('https://0300.0250.1.1/hook')).not.toBeNull();
+  });
+});
+
+describe('webhook registration persistence (#730)', () => {
+  test('stores registrations durably and never stores the plaintext secret', () => {
+    const secret = 'test-webhook-secret';
+    const registration = registerWebhook('https://example.com/webhook', ['batch.completed'], secret);
+
+    try {
+      expect(getWebhooks()).toEqual([registration]);
+      expect(getWebhooksRedacted()).toEqual([
+        expect.objectContaining({
+          id: registration.id,
+          secretPrefix: secret.slice(0, 8),
+        }),
+      ]);
+      expect(JSON.stringify(getWebhooksRedacted())).not.toContain(secret);
+
+      const row = getDb()
+        .prepare('SELECT secretHash, secretCiphertext FROM webhooks WHERE id = ?')
+        .get(registration.id) as { secretHash: string; secretCiphertext: string };
+      expect(row.secretHash).not.toBe(secret);
+      expect(row.secretCiphertext).not.toContain(secret);
+    } finally {
+      unregisterWebhook(registration.id);
+    }
   });
 });

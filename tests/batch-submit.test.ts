@@ -479,7 +479,7 @@ describe("POST /api/batch-submit server-signing auth (#696)", () => {
     expect(mockProcessJobInBackground).not.toHaveBeenCalled();
   });
 
-  test("allows server-signing request when SERVER_SIGNING_API_KEY is not configured (backward-compat)", async () => {
+  test("rejects (403, fail closed) server-signing request when SERVER_SIGNING_API_KEY is not configured (#728)", async () => {
     process.env.ALLOW_SERVER_SIGNING = "true";
     process.env.STELLAR_SECRET_KEY = SERVER_KEYPAIR.secret();
     // SERVER_SIGNING_API_KEY is intentionally NOT set
@@ -490,10 +490,12 @@ describe("POST /api/batch-submit server-signing auth (#696)", () => {
       payments: [{ address: OWNER_PUBLIC_KEY, amount: "1", asset: "XLM" }],
     };
 
-    const response = await POST(makeRequest(body, "backward-compat-key") as never);
+    const response = await POST(makeRequest(body, "fail-closed-key") as never);
+    const json = await response.json();
 
-    expect(response.status).toBe(202);
-    expect(mockProcessJobInBackground).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(403);
+    expect(json.error).toMatch(/SERVER_SIGNING_API_KEY is not configured/i);
+    expect(mockProcessJobInBackground).not.toHaveBeenCalled();
   });
 
   test("allows server-signing request with valid API key", async () => {

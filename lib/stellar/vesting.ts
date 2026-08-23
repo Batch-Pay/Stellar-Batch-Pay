@@ -11,7 +11,7 @@ import {
 } from "stellar-sdk";
 import type { PaymentInstruction, Network } from "./types";
 import { acquireGuard } from "./reentrancy-guard";
-import { amountToStroopsI128 } from "./utils";
+import { amountToStroopsI128, amountToTokenStroopsI128 } from "./utils";
 
 const SOROBAN_RPC_URLS: Record<Network, string> = {
   testnet: "https://soroban-testnet.stellar.org",
@@ -27,16 +27,14 @@ function addressVecToScVal(addresses: string[]): xdr.ScVal {
 }
 
 /**
- * Serialize an array of i128 amounts (in stroops) to ScVal Vec<i128>.
- * Amounts are passed as string decimals; we convert to i128 stroops (7 decimal
- * places) using decimal-safe big.js arithmetic via {@link amountToStroopsI128}.
- * Invalid or over-precise amounts throw before any RPC simulation (#506).
+ * Serialize an array of already-converted i128 stroop amounts to ScVal Vec<i128>.
+ * Callers must resolve each amount's token decimals (via {@link resolveAmountToStroops})
+ * before calling this — see #712 for why a single fixed scale is wrong for
+ * generic Soroban tokens.
  */
-function amountVecToScVal(amounts: string[]): xdr.ScVal {
+function amountVecToScVal(stroopAmounts: bigint[]): xdr.ScVal {
   return xdr.ScVal.scvVec(
-    amounts.map((amt) =>
-      nativeToScVal(amountToStroopsI128(amt), { type: "i128" }),
-    ),
+    stroopAmounts.map((amt) => nativeToScVal(amt, { type: "i128" })),
   );
 }
 
@@ -60,6 +58,34 @@ const SAC_REGISTRY: Record<Network, Record<string, string>> = {
   futurenet: {},
 };
 
+// Native XLM's wrapped Soroban token address depends on network.
+const NATIVE_TOKEN_ADDRESS: Record<Network, string> = {
+  testnet: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+  mainnet: "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
+  futurenet: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+};
+
+/**
+ * Contract addresses that back a classic Stellar asset (native XLM or a
+ * registered SAC). A payment whose asset resolves to one of these addresses
+ * still uses the fixed 7-decimal Stellar scale even when the caller supplies
+ * the C... address directly instead of "XLM" / "CODE:ISSUER" (#712).
+ */
+const KNOWN_SAC_ADDRESSES: Record<Network, Set<string>> = {
+  testnet: new Set([
+    NATIVE_TOKEN_ADDRESS.testnet,
+    ...Object.values(SAC_REGISTRY.testnet),
+  ]),
+  mainnet: new Set([
+    NATIVE_TOKEN_ADDRESS.mainnet,
+    ...Object.values(SAC_REGISTRY.mainnet),
+  ]),
+  futurenet: new Set([
+    NATIVE_TOKEN_ADDRESS.futurenet,
+    ...Object.values(SAC_REGISTRY.futurenet),
+  ]),
+};
+
 /**
  * Convert asset strings to token addresses.
  * Handles 'XLM' (native), C... SAC addresses (passthrough), and 'CODE:ISSUER' (lookup via SAC registry).
@@ -68,14 +94,7 @@ const SAC_REGISTRY: Record<Network, Record<string, string>> = {
 function assetToTokenAddress(asset: string, network: Network): string {
   // Native XLM wrapped address depends on network
   if (asset === "XLM") {
-    switch (network) {
-      case "testnet":
-        return "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-      case "mainnet":
-        return "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
-      case "futurenet":
-        return "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-    }
+    return NATIVE_TOKEN_ADDRESS[network];
   }
 
   // Pass through valid C... SAC contract addresses unchanged
@@ -105,8 +124,122 @@ function assetToTokenAddress(asset: string, network: Network): string {
   );
 }
 
-function amountToScVal(amount: string): xdr.ScVal {
-  return nativeToScVal(amountToStroopsI128(amount), { type: "i128" });
+// In-memory cache of resolved `decimals()` values, keyed by `${network}:${tokenAddress}`.
+// Populated once per token for the lifetime of the process (#712).
+const tokenDecimalsCache = new Map<string, number>();
+// De-dupes concurrent lookups for the same token (e.g. a batch with many
+// payments in the same token) so only one RPC round trip is made.
+const tokenDecimalsInFlight = new Map<string, Promise<number>>();
+
+/**
+ * Calls a Soroban token contract's `decimals()` method over RPC and caches
+ * the result per contract address. Concurrent callers for the same token
+ * share a single in-flight request instead of firing duplicate simulations.
+ */
+async function fetchTokenDecimals(
+  tokenAddress: string,
+  network: Network,
+  publicKey: string,
+): Promise<number> {
+  const cacheKey = `${network}:${tokenAddress}`;
+  const cached = tokenDecimalsCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const inFlight = tokenDecimalsInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    const networkPassphrase =
+      network === "mainnet"
+        ? Networks.PUBLIC
+        : network === "futurenet"
+          ? Networks.FUTURENET
+          : Networks.TESTNET;
+    const rpcUrl = SOROBAN_RPC_URLS[network];
+
+    const { rpc: SorobanRpc, scValToNative } = await import("stellar-sdk");
+    const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+
+    const sourceAccount = await server.getAccount(publicKey);
+    const account = new Account(
+      sourceAccount.accountId(),
+      sourceAccount.sequenceNumber(),
+    );
+
+    const contract = new Contract(tokenAddress);
+    const tx = new TransactionBuilder(account, {
+      fee: "1000000",
+      networkPassphrase,
+    })
+      .addOperation(contract.call("decimals"))
+      .setTimeout(300)
+      .build();
+
+    const simResult = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(
+        `Failed to read decimals() for token ${tokenAddress}: ${simResult.error}`,
+      );
+    }
+    if (!simResult.result) {
+      throw new Error(
+        `Failed to read decimals() for token ${tokenAddress}: simulation returned no result`,
+      );
+    }
+
+    const decimals = Number(scValToNative(simResult.result.retval));
+    tokenDecimalsCache.set(cacheKey, decimals);
+    return decimals;
+  })();
+
+  tokenDecimalsInFlight.set(cacheKey, promise);
+  try {
+    return await promise;
+  } finally {
+    tokenDecimalsInFlight.delete(cacheKey);
+  }
+}
+
+/**
+ * Converts a human-readable amount string to i128 stroops using the correct
+ * decimal scale for `asset`: the fixed 7-decimal Stellar scale for classic
+ * assets and known SACs, or the token contract's own `decimals()` for any
+ * other Soroban token address (#712).
+ */
+async function resolveAmountToStroops(
+  amount: string,
+  asset: string,
+  tokenAddress: string,
+  network: Network,
+  publicKey: string,
+): Promise<bigint> {
+  const isClassic =
+    !StrKey.isValidContract(asset) ||
+    KNOWN_SAC_ADDRESSES[network].has(tokenAddress);
+
+  if (isClassic) {
+    return amountToStroopsI128(amount);
+  }
+
+  const decimals = await fetchTokenDecimals(tokenAddress, network, publicKey);
+  return amountToTokenStroopsI128(amount, decimals);
+}
+
+async function amountToScVal(
+  amount: string,
+  asset: string,
+  tokenAddress: string,
+  network: Network,
+  publicKey: string,
+): Promise<xdr.ScVal> {
+  const stroops = await resolveAmountToStroops(
+    amount,
+    asset,
+    tokenAddress,
+    network,
+    publicKey,
+  );
+  return nativeToScVal(stroops, { type: "i128" });
 }
 
 async function buildSorobanTransaction(
@@ -165,7 +298,7 @@ export async function buildDepositTransaction(
   publicKey: string,
 ): Promise<string> {
   // Reentrancy guard: reject concurrent deposit calls for the same account (#250).
-  const release = acquireGuard(publicKey, "deposit");
+  const release = await acquireGuard(publicKey, "deposit");
   try {
     const networkPassphrase =
       network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
@@ -186,15 +319,22 @@ export async function buildDepositTransaction(
     // #210: Extract tokens from each payment (one per recipient)
     const tokens = payments.map((p) => assetToTokenAddress(p.asset, network));
     const recipients = payments.map((p) => p.address);
-    const amounts = payments.map((p) => p.amount);
     const memos = payments.map((p) => p.memo || "");
+
+    // #712: Each payment's token may have its own decimal precision (6, 7,
+    // 18, ...), so resolve and convert per-payment instead of assuming 7.
+    const stroopAmounts = await Promise.all(
+      payments.map((p, i) =>
+        resolveAmountToStroops(p.amount, p.asset, tokens[i], network, publicKey),
+      ),
+    );
 
     const operation = contract.call(
       'deposit',
       new Address(publicKey).toScVal(),          // sender: Address
       addressVecToScVal(tokens),                  // tokens: Vec<Address>
       addressVecToScVal(recipients),              // recipients: Vec<Address>
-      amountVecToScVal(amounts),                  // amounts: Vec<i128>
+      amountVecToScVal(stroopAmounts),             // amounts: Vec<i128>
       nativeToScVal(BigInt(startTime), { type: 'u64' }), // start_time: u64
       nativeToScVal(BigInt(endTime), { type: 'u64' }),   // end_time: u64
       nativeToScVal(BigInt(cliffTime), { type: 'u64' }), // cliff_time: u64
@@ -229,6 +369,11 @@ export async function buildDepositTransaction(
 
 /**
  * Build an unsigned transaction to claim from a vesting schedule.
+ *
+ * `asset` identifies the vesting schedule's token so the claim amount is
+ * encoded with that token's own decimal precision instead of always
+ * assuming 7 (#712). Defaults to "XLM" to preserve prior behavior for
+ * existing callers that don't pass it.
  */
 export async function buildClaimTransaction(
   contractId: string,
@@ -237,16 +382,23 @@ export async function buildClaimTransaction(
   amount: string,
   network: "testnet" | "mainnet",
   publicKey: string,
+  asset: string = "XLM",
 ): Promise<string> {
-  const contract = new Contract(contractId);
-  const operation = contract.call(
-    "claim",
-    new Address(recipient).toScVal(),
-    nativeToScVal(BigInt(index), { type: "u32" }),
-    amountToScVal(amount),
-  );
+  const release = await acquireGuard(publicKey, "claim");
+  try {
+    const contract = new Contract(contractId);
+    const tokenAddress = assetToTokenAddress(asset, network);
+    const operation = contract.call(
+      "claim",
+      new Address(recipient).toScVal(),
+      nativeToScVal(BigInt(index), { type: "u32" }),
+      await amountToScVal(amount, asset, tokenAddress, network, publicKey),
+    );
 
-  return buildSorobanTransaction(contractId, operation, network, publicKey);
+    return await buildSorobanTransaction(contractId, operation, network, publicKey);
+  } finally {
+    release();
+  }
 }
 
 /**
@@ -259,18 +411,94 @@ export async function buildRevokeTransaction(
   network: "testnet" | "mainnet",
   publicKey: string,
 ): Promise<string> {
-  const contract = new Contract(contractId);
-  const operation = contract.call(
-    "revoke",
-    // The contract signature is `revoke(env, caller, recipient, index)` and the
-    // sender authorization is checked against `caller`. Omitting it produces an
-    // XDR that does not match the contract interface (#392).
-    new Address(publicKey).toScVal(),
-    new Address(recipient).toScVal(),
-    nativeToScVal(BigInt(index), { type: "u32" }),
-  );
+  const release = await acquireGuard(publicKey, "revoke");
+  try {
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "revoke",
+      // The contract signature is `revoke(env, caller, recipient, index)` and the
+      // sender authorization is checked against `caller`. Omitting it produces an
+      // XDR that does not match the contract interface (#392).
+      new Address(publicKey).toScVal(),
+      new Address(recipient).toScVal(),
+      nativeToScVal(BigInt(index), { type: "u32" }),
+    );
 
-  return buildSorobanTransaction(contractId, operation, network, publicKey);
+    return await buildSorobanTransaction(contractId, operation, network, publicKey);
+  } finally {
+    release();
+  }
+}
+
+/** One (recipient, index) pair for {@link buildBatchRevokeTransaction}. */
+export interface VestingRevokeRequest {
+  recipient: string;
+  index: number;
+}
+
+/**
+ * Encode a contract `RevokeRequest { recipient, index }` as an ScMap.
+ * Map keys are sorted alphabetically (`index` before `recipient`) as required
+ * by the Soroban XDR encoding rules.
+ */
+function revokeRequestToScVal(request: VestingRevokeRequest): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("index"),
+      val: nativeToScVal(request.index, { type: "u32" }),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("recipient"),
+      val: new Address(request.recipient).toScVal(),
+    }),
+  ]);
+}
+
+/**
+ * Sort revoke requests so each recipient's indices appear in strictly
+ * descending order — required by `batch_revoke` / `revoke_batch` (#308/#505).
+ * Recipients are grouped for a stable, deterministic order.
+ */
+export function sortRevokeRequestsDescending(
+  requests: VestingRevokeRequest[],
+): VestingRevokeRequest[] {
+  return [...requests].sort((a, b) => {
+    if (a.recipient !== b.recipient) {
+      return a.recipient < b.recipient ? -1 : 1;
+    }
+    return b.index - a.index;
+  });
+}
+
+/**
+ * Build an unsigned transaction to revoke multiple vesting schedules in one
+ * `batch_revoke(caller, requests)` call. Requests are sorted into the
+ * strictly-descending-per-recipient order the contract requires.
+ */
+export async function buildBatchRevokeTransaction(
+  contractId: string,
+  requests: VestingRevokeRequest[],
+  network: "testnet" | "mainnet",
+  publicKey: string,
+): Promise<string> {
+  if (requests.length === 0) {
+    throw new Error("batch_revoke requires at least one (recipient, index) pair");
+  }
+
+  const release = await acquireGuard(publicKey, "revoke");
+  try {
+    const sorted = sortRevokeRequestsDescending(requests);
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "batch_revoke",
+      new Address(publicKey).toScVal(),
+      xdr.ScVal.scvVec(sorted.map(revokeRequestToScVal)),
+    );
+
+    return await buildSorobanTransaction(contractId, operation, network, publicKey);
+  } finally {
+    release();
+  }
 }
 
 /**
@@ -281,37 +509,42 @@ export async function buildBumpInstanceTtlTransaction(
   network: "testnet" | "mainnet",
   publicKey: string,
 ): Promise<string> {
-  const networkPassphrase =
-    network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-  const rpcUrl = SOROBAN_RPC_URLS[network];
+  const release = await acquireGuard(publicKey, "bump");
+  try {
+    const networkPassphrase =
+      network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+    const rpcUrl = SOROBAN_RPC_URLS[network];
 
-  const { rpc: SorobanRpc } = await import("stellar-sdk");
-  const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+    const { rpc: SorobanRpc } = await import("stellar-sdk");
+    const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
 
-  const sourceAccount = await server.getAccount(publicKey);
-  const account = new Account(
-    sourceAccount.accountId(),
-    sourceAccount.sequenceNumber(),
-  );
+    const sourceAccount = await server.getAccount(publicKey);
+    const account = new Account(
+      sourceAccount.accountId(),
+      sourceAccount.sequenceNumber(),
+    );
 
-  const contract = new Contract(contractId);
-  const operation = contract.call("bump_instance_ttl");
+    const contract = new Contract(contractId);
+    const operation = contract.call("bump_instance_ttl");
 
-  const tx = new TransactionBuilder(account, {
-    fee: "1000000",
-    networkPassphrase,
-  })
-    .addOperation(operation)
-    .setTimeout(300)
-    .build();
+    const tx = new TransactionBuilder(account, {
+      fee: "1000000",
+      networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(300)
+      .build();
 
-  const simResult = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Simulation failed: ${simResult.error}`);
+    const simResult = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+
+    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+    return preparedTx.toEnvelope().toXDR("base64");
+  } finally {
+    release();
   }
-
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-  return preparedTx.toEnvelope().toXDR("base64");
 }
 
 /**
@@ -330,15 +563,20 @@ export async function buildTransferVestingRightsTransaction(
   network: "testnet" | "mainnet",
   publicKey: string,
 ): Promise<string> {
-  const contract = new Contract(contractId);
-  const operation = contract.call(
-    "transfer_vesting_rights",
-    new Address(from).toScVal(),
-    nativeToScVal(BigInt(index), { type: "u32" }),
-    new Address(to).toScVal(),
-  );
+  const release = await acquireGuard(publicKey, "transfer");
+  try {
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "transfer_vesting_rights",
+      new Address(from).toScVal(),
+      nativeToScVal(BigInt(index), { type: "u32" }),
+      new Address(to).toScVal(),
+    );
 
-  return buildSorobanTransaction(contractId, operation, network, publicKey);
+    return await buildSorobanTransaction(contractId, operation, network, publicKey);
+  } finally {
+    release();
+  }
 }
 
 /**
@@ -351,39 +589,44 @@ export async function buildBumpVestingTtlTransaction(
   network: "testnet" | "mainnet",
   publicKey: string,
 ): Promise<string> {
-  const networkPassphrase =
-    network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-  const rpcUrl = SOROBAN_RPC_URLS[network];
+  const release = await acquireGuard(publicKey, "bump");
+  try {
+    const networkPassphrase =
+      network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+    const rpcUrl = SOROBAN_RPC_URLS[network];
 
-  const { rpc: SorobanRpc } = await import("stellar-sdk");
-  const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+    const { rpc: SorobanRpc } = await import("stellar-sdk");
+    const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
 
-  const sourceAccount = await server.getAccount(publicKey);
-  const account = new Account(
-    sourceAccount.accountId(),
-    sourceAccount.sequenceNumber(),
-  );
+    const sourceAccount = await server.getAccount(publicKey);
+    const account = new Account(
+      sourceAccount.accountId(),
+      sourceAccount.sequenceNumber(),
+    );
 
-  const contract = new Contract(contractId);
-  const operation = contract.call(
-    "bump_vesting_ttl",
-    new Address(recipient).toScVal(),
-    nativeToScVal(index, { type: "u32" }),
-  );
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "bump_vesting_ttl",
+      new Address(recipient).toScVal(),
+      nativeToScVal(index, { type: "u32" }),
+    );
 
-  const tx = new TransactionBuilder(account, {
-    fee: "1000000",
-    networkPassphrase,
-  })
-    .addOperation(operation)
-    .setTimeout(300)
-    .build();
+    const tx = new TransactionBuilder(account, {
+      fee: "1000000",
+      networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(300)
+      .build();
 
-  const simResult = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Simulation failed: ${simResult.error}`);
+    const simResult = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+
+    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+    return preparedTx.toEnvelope().toXDR("base64");
+  } finally {
+    release();
   }
-
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-  return preparedTx.toEnvelope().toXDR("base64");
 }

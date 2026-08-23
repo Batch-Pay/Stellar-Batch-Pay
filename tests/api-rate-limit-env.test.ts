@@ -17,6 +17,9 @@ const ENV_KEYS = [
   "RATE_LIMIT_BATCH_STATUS_FREE",
   "RATE_LIMIT_BATCH_EVENTS_FREE",
   "RATE_LIMIT_HEALTH_FREE",
+  "RATE_LIMIT_BATCH_RETRY_FREE",
+  "RATE_LIMIT_BATCH_RECOVER_FREE",
+  "RATE_LIMIT_BATCH_HISTORY_FREE",
 ];
 
 function clearEnv() {
@@ -99,5 +102,44 @@ describe("getEndpointLimits (#271)", () => {
     process.env.RATE_LIMIT_BATCH_STATUS_FREE = "99";
     const { getEndpointLimits } = await import("../lib/api-rate-limit");
     expect(getEndpointLimits()["batch-status"].free).toBe(99);
+  });
+
+  // #743: batch-retry, batch-recover, batch-history previously had no rate
+  // limit policy at all — they now use the same env-configurable mechanism
+  // as every other endpoint.
+  test("batch-retry endpoint has default rate limits (#743)", async () => {
+    const { getEndpointLimits } = await import("../lib/api-rate-limit");
+    const limits = getEndpointLimits()["batch-retry"];
+    expect(limits).toEqual({ free: 5, pro: 15, enterprise: 45, windowMs: 60_000 });
+  });
+
+  test("batch-recover endpoint has default rate limits (#743)", async () => {
+    const { getEndpointLimits } = await import("../lib/api-rate-limit");
+    const limits = getEndpointLimits()["batch-recover"];
+    expect(limits).toEqual({ free: 30, pro: 100, enterprise: 300, windowMs: 60_000 });
+  });
+
+  test("batch-history endpoint has default rate limits (#743)", async () => {
+    const { getEndpointLimits } = await import("../lib/api-rate-limit");
+    const limits = getEndpointLimits()["batch-history"];
+    expect(limits).toEqual({ free: 20, pro: 60, enterprise: 180, windowMs: 60_000 });
+  });
+
+  test("RATE_LIMIT_BATCH_RETRY_FREE overrides the batch-retry free tier (#743)", async () => {
+    process.env.RATE_LIMIT_BATCH_RETRY_FREE = "77";
+    const { getEndpointLimits } = await import("../lib/api-rate-limit");
+    expect(getEndpointLimits()["batch-retry"].free).toBe(77);
+  });
+
+  test("RATE_LIMIT_BATCH_RECOVER_FREE overrides the batch-recover free tier (#743)", async () => {
+    process.env.RATE_LIMIT_BATCH_RECOVER_FREE = "77";
+    const { getEndpointLimits } = await import("../lib/api-rate-limit");
+    expect(getEndpointLimits()["batch-recover"].free).toBe(77);
+  });
+
+  test("RATE_LIMIT_BATCH_HISTORY_FREE overrides the batch-history free tier (#743)", async () => {
+    process.env.RATE_LIMIT_BATCH_HISTORY_FREE = "77";
+    const { getEndpointLimits } = await import("../lib/api-rate-limit");
+    expect(getEndpointLimits()["batch-history"].free).toBe(77);
   });
 });

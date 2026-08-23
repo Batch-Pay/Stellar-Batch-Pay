@@ -1,4 +1,5 @@
 // scripts/keeper.ts
+import { pathToFileURL } from "node:url";
 import {
   rpc as SorobanRpc,
   Horizon,
@@ -10,7 +11,8 @@ import {
   Address,
   nativeToScVal,
 } from "stellar-sdk";
-import { createSecretsProvider } from "../lib/secrets/index";
+import { prioritizeRecipients } from "../lib/keeper/threshold";
+import { createSecretsProvider, assertEnvBackendAllowed, isProductionEnv } from "../lib/secrets/index";
 import {
   decodeTopicValue,
   parseVestingEventRecipient,
@@ -35,7 +37,7 @@ const LOW_BALANCE_THRESHOLD = Number(process.env.LOW_BALANCE_THRESHOLD || "50");
 const STATE_FILE_PATH =
   process.env.KEEPER_STATE_PATH || "./data/keeper-state.json";
 
-if (!CONTRACT_ID) {
+if (!CONTRACT_ID && process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   console.error("MISSING CONTRACT_ID in environment");
   process.exit(1);
 }
@@ -120,9 +122,40 @@ async function checkBalance(_server: SorobanRpc.Server, publicKey: string) {
   }
 }
 
+export function getNextPageCursor(response: { cursor?: string | null; latestLedger?: number | null } | undefined): string | undefined {
+  if (!response) return undefined;
+  return typeof response.cursor === "string" && response.cursor.length > 0
+    ? response.cursor
+    : undefined;
+}
+
+export function determineMaintenanceState(
+  status: "bumped" | "no-work" | "pending" | "failed",
+): "advance" | "reset" | "hold" {
+  switch (status) {
+    case "bumped":
+      return "advance";
+    case "no-work":
+      return "reset";
+    case "pending":
+    case "failed":
+      return "hold";
+    default:
+      return "hold";
+  }
+}
+
 // ── Main loop ──────────────────────────────────────────────────────────────
 
 export async function main() {
+  // Refuse to start with the env backend in production (#734).
+  // This mirrors the guard inside createSecretsProvider but fires at the very
+  // top of the keeper's startup so the error surfaces in logs immediately,
+  // before any network activity or secret fetching begins.
+  if (isProductionEnv() && (process.env.SECRET_BACKEND ?? 'env') === 'env') {
+    assertEnvBackendAllowed();
+  }
+
   // Fetch the keeper secret from the configured backend (#257).
   // Set SECRET_BACKEND=aws|github|env (default: env with a warning).
   const secrets = await createSecretsProvider();
@@ -144,7 +177,19 @@ export async function main() {
     // For this demonstration, we'll focus on the logic for a single recipient.
     const recipients = await fetchActiveRecipients();
 
-    for (const recipient of recipients) {
+    if (recipients.length === 0) {
+      await sendAlert(
+        "No active recipients were discovered from contract events; keeper may be missing vesting entries.",
+      );
+    }
+
+    const currentLedger = (await server.getLatestLedger()).sequence;
+    const orderedRecipients = prioritizeRecipients(
+      recipients.map((recipient) => ({ recipient, liveUntilLedger: null })),
+      currentLedger,
+      BUMP_THRESHOLD_LEDGERS,
+    ).map((snapshot) => snapshot.recipient);
+    for (const recipient of [...new Set([...orderedRecipients, ...recipients])]) {
       await maintainRecipientPaginated(
         recipient,
         server,
@@ -205,7 +250,7 @@ async function maintainRecipientPaginated(
     `Maintaining recipient: ${recipient} — window [${startIndex}, ${startIndex + limit})`,
   );
 
-  const bumped = await maintainRecipientWindow(
+  const maintenanceStatus = await maintainRecipientWindow(
     recipient,
     server,
     contract,
@@ -214,20 +259,21 @@ async function maintainRecipientPaginated(
     limit,
   );
 
-  if (bumped) {
-    // Advance cursor for next run.
+  const action = determineMaintenanceState(maintenanceStatus);
+  if (action === "advance") {
     state.nextMaintenanceIndex[recipient] = startIndex + limit;
     console.log(
       `  → bumped indices [${startIndex}, ${startIndex + limit}); ` +
         `next run starts at ${startIndex + limit}`,
     );
-  } else {
-    // Simulation reported no work — either all indices in this window are
-    // healthy or we've passed the end of this recipient's schedule list.
-    // Reset cursor so the next run starts a fresh sweep from index 0.
+  } else if (action === "reset") {
     state.nextMaintenanceIndex[recipient] = 0;
     console.log(
       `  → no work in window [${startIndex}, ${startIndex + limit}); cursor reset to 0`,
+    );
+  } else {
+    console.log(
+      `  → tx for ${recipient} is still pending or failed; leaving cursor at ${startIndex}`,
     );
   }
 }
@@ -252,6 +298,9 @@ async function fetchActiveRecipients(): Promise<string[]> {
       });
 
       if (!events.events || events.events.length === 0) {
+        await sendAlert(
+          "Discovery scan returned no events; contract event pagination may have ended or failed.",
+        );
         break;
       }
 
@@ -277,7 +326,12 @@ async function fetchActiveRecipients(): Promise<string[]> {
         }
       }
 
-      cursor = events.latestLedger?.toString();
+      const nextCursor = getNextPageCursor(events);
+      if (!nextCursor) {
+        break;
+      }
+
+      cursor = nextCursor;
       pageCount++;
     }
 
@@ -287,8 +341,12 @@ async function fetchActiveRecipients(): Promise<string[]> {
     );
     return result;
   } catch (error) {
-    console.error("Failed to fetch active recipients:", error);
-    // Fallback: return empty list so bot continues but does minimal work
+    const errorMessage =
+      error instanceof Error ? error.message : String(error);
+    console.error("Failed to fetch active recipients:", errorMessage);
+    await sendAlert(
+      `Failed to fetch active recipients from the contract event log: ${errorMessage}`,
+    );
     return [];
   }
 }
@@ -322,8 +380,29 @@ async function maintainInstance(
   console.log(`Instance TTL bumped: ${result.hash}`);
 }
 
-// Returns true if the maintenance call went through (entries were bumped),
-// false if the simulation reported no work for this window.
+async function pollConfirmedTransaction(
+  server: SorobanRpc.Server,
+  hash: string,
+): Promise<"SUCCESS" | "FAILED" | "PENDING"> {
+  const maxAttempts = 30;
+  const retryDelayMs = 2000;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const result = await server.getTransaction(hash);
+    if (result.status === "SUCCESS") {
+      return "SUCCESS";
+    }
+    if (result.status === "FAILED") {
+      return "FAILED";
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+  }
+
+  return "PENDING";
+}
+
+// Returns the maintenance outcome, allowing pagination state to advance only
+// when the tx has actually finalized successfully.
 async function maintainRecipientWindow(
   recipient: string,
   server: SorobanRpc.Server,
@@ -331,7 +410,7 @@ async function maintainRecipientWindow(
   keeperKeypair: Keypair,
   startIndex: number,
   limit: number,
-): Promise<boolean> {
+): Promise<"bumped" | "no-work" | "pending" | "failed"> {
   const sourceAccount = await server.getAccount(keeperKeypair.publicKey());
 
   const tx = new TransactionBuilder(
@@ -351,7 +430,7 @@ async function maintainRecipientWindow(
 
   const sim = await server.simulateTransaction(tx);
   if (SorobanRpc.Api.isSimulationError(sim)) {
-    return false;
+    return "no-work";
   }
 
   const preparedTx = SorobanRpc.assembleTransaction(tx, sim).build();
@@ -361,7 +440,24 @@ async function maintainRecipientWindow(
   console.log(
     `  ✓ maintenance tx submitted for ${recipient} [${startIndex}, ${startIndex + limit}): ${result.hash}`,
   );
-  return true;
+
+  const txStatus = await pollConfirmedTransaction(server, result.hash);
+  if (txStatus === "SUCCESS") {
+    return "bumped";
+  }
+  if (txStatus === "FAILED") {
+    await sendAlert(
+      `Recipient maintenance for ${recipient} failed to confirm on-chain (hash ${result.hash}).`,
+    );
+    return "failed";
+  }
+
+  console.log(
+    `  → maintenance tx for ${recipient} is still pending; keeping cursor at ${startIndex}`,
+  );
+  return "pending";
 }
 
-main().catch(() => process.exit(1));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main().catch(() => process.exit(1));
+}

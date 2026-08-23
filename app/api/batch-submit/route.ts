@@ -42,6 +42,8 @@ import type {
 import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
 import { canonicalizeIdempotencyPayload } from "@/lib/idempotency";
 import { logger } from "@/lib/logger";
+import { validateServerSigningAuth } from "@/lib/server-signing-auth";
+import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
 
 interface RequestBody {
   payments?: PaymentInstruction[];
@@ -91,11 +93,11 @@ function isStrandedJob(job: JobState | undefined): boolean {
  * On idempotent replay, resume processing when the original job is stranded.
  * Returns true when the worker was re-invoked.
  */
-function resumeStrandedReplay(
+async function resumeStrandedReplay(
   jobId: string,
   restartWorker: () => void,
-): boolean {
-  const job = getJob(jobId);
+): Promise<boolean> {
+  const job = await getJob(jobId);
 
   if (!isStrandedJob(job)) return false;
 
@@ -118,10 +120,10 @@ function buildIdempotencyKey(body: RequestBody, headerKey: string | null): { ide
 }
 
 export async function POST(request: NextRequest) {
-  const rate = applyRateLimit(request, "batch-submit");
+  const rate = await applyRateLimit(request, "batch-submit");
   if (rate.blocked) return rate.response!;
 
-  const requestId = request.headers.get("x-request-id");
+  const requestId = getRequestId(request);
 
   try {
     // Parse request body
@@ -237,7 +239,7 @@ export async function POST(request: NextRequest) {
       // shows real recipient addresses and retry/export flows have metadata.
       const storedPayments = payments ?? [];
 
-      const outcome = createIdempotentJob<BatchSubmitAcceptedResponse>({
+      const outcome = await createIdempotentJob<BatchSubmitAcceptedResponse>({
         idempotencyKey,
         requestHash,
         payments: storedPayments,
@@ -257,7 +259,7 @@ export async function POST(request: NextRequest) {
       });
 
       if (outcome.replayed) {
-        const workerRestarted = resumeStrandedReplay(outcome.jobId, () => {
+        const workerRestarted = await resumeStrandedReplay(outcome.jobId, () => {
           void processJobInBackground(outcome.jobId, storedPayments, network, undefined, signedTransactions, requestId || undefined);
         });
         logger.info({ requestId, jobId: outcome.jobId, publicKey, network, replayed: true, workerRestarted }, "Batch submit job replayed (pre-signed mode)");
@@ -294,6 +296,20 @@ export async function POST(request: NextRequest) {
             "Server-side signing is disabled. Use client-side signing with a connected wallet, or enable ALLOW_SERVER_SIGNING=true in server configuration.",
         },
         { status: 403 },
+      );
+    }
+
+    // #696: Require cryptographic authorization for server-signing requests.
+    // The caller must present a valid API key via the Authorization header.
+    const authResult = validateServerSigningAuth(
+      request.headers.get("authorization"),
+      requestId,
+    );
+    if (!authResult.valid) {
+      logger.warn({ requestId }, `Server-signing auth rejected: ${authResult.error}`);
+      return NextResponse.json(
+        { error: authResult.error },
+        { status: authResult.status ?? 403 },
       );
     }
 
@@ -363,7 +379,7 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    const outcome = createIdempotentJob<BatchSubmitAcceptedResponse>({
+    const outcome = await createIdempotentJob<BatchSubmitAcceptedResponse>({
       idempotencyKey,
       requestHash,
       payments,
@@ -381,7 +397,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (outcome.replayed) {
-      const workerRestarted = resumeStrandedReplay(outcome.jobId, () => {
+      const workerRestarted = await resumeStrandedReplay(outcome.jobId, () => {
         void processJobInBackground(outcome.jobId, payments, network, secretKey, undefined, requestId || undefined);
       });
       logger.info({ requestId, jobId: outcome.jobId, publicKey, network, replayed: true, workerRestarted }, "Batch submit job replayed (server-signed mode)");
@@ -404,17 +420,18 @@ export async function POST(request: NextRequest) {
     if (error instanceof IdempotencyConflictError) {
       logger.warn({ requestId }, `Idempotency conflict: ${error.message}`);
       return setRateLimitHeaders(safeJsonResponse(
-        { error: error.message },
+        { error: error.message, code: "CONFLICT", requestId },
         { status: 409 },
       ), rate);
     }
 
-    logger.error({ requestId }, "Batch submission error", error);
-    return setRateLimitHeaders(safeJsonResponse(
-      {
-        error: error instanceof Error ? error.message : "Internal server error",
-      },
-      { status: 500 },
-    ), rate);
+    return setRateLimitHeaders(
+      sanitizedErrorResponse(error, {
+        requestId,
+        status: 500,
+        logMessage: "Batch submission error",
+      }),
+      rate,
+    );
   }
 }

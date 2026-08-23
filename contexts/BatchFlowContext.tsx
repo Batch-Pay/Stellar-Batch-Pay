@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useWallet } from "@/contexts/WalletContext";
@@ -8,7 +8,11 @@ import { useNotifications } from "@/contexts/NotificationsContext";
 import { batchHistoryKeys, dashboardMetricsKeys } from "@/lib/query-keys";
 import { parsePaymentFile, analyzeParsedPayments } from "@/lib/stellar/parser";
 import { getBatchSummary } from "@/lib/stellar/summary";
+import { validatePaymentInstruction } from "@/lib/stellar/validator";
 import { canonicalizeIdempotencyPayload } from "@/lib/idempotency";
+import { authenticatedFetch } from "@/lib/wallet-session-client";
+import { useOptionalWalletSession } from "@/contexts/WalletSessionContext";
+import { isSubmissionBlocked } from "@/lib/stellar/job-lifecycle";
 import type {
   ParsedPaymentFile,
   BatchResult,
@@ -65,6 +69,7 @@ interface BatchFlowContextType {
   setSummary: (summary: any) => void;
   isSubmitting: boolean;
   setIsSubmitting: (submitting: boolean) => void;
+  hasActiveJob: boolean;
   result: BatchResult | null;
   setResult: (res: BatchResult | null) => void;
   jobId: string | null;
@@ -93,7 +98,7 @@ interface BatchFlowContextType {
   // Actions
   onSkipToggle: (index: number) => void;
   onConvertToggle: (index: number) => void;
-  handleRetryFailed: (failedPayments: UploadedPaymentInstruction[]) => void;
+  handleRetryFailed: (failedPayments: PaymentInstruction[]) => void;
   handleFileSelect: (selectedFile: File, format: "json" | "csv") => Promise<void>;
   handleManualContinue: () => void;
   loadBatchMeta: (payments: PaymentInstruction[]) => Promise<void>;
@@ -135,6 +140,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
   const pollErrorCountRef = useRef(0);
   const queryClient = useQueryClient();
   const { publicKey, expectedNetwork, selectNetwork } = useWallet();
+  const walletSession = useOptionalWalletSession();
   const { pushBatchNotification } = useNotifications();
 
   const network = expectedNetwork === "mainnet" ? "mainnet" : "testnet";
@@ -193,6 +199,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
     }
   }, [handleRestore]);
 
+
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -212,9 +219,10 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
         try {
           abortControllerRef.current = new AbortController();
           const params = new URLSearchParams({ publicKey: ownerPublicKey });
-          const res = await fetch(
+          const res = await authenticatedFetch(
             `/api/batch-status/${id}?${params.toString()}`,
-            { signal: abortControllerRef.current.signal }
+            ownerPublicKey,
+            { signal: abortControllerRef.current.signal },
           );
           if (!res.ok) {
             throw new Error(`HTTP error ${res.status}`);
@@ -339,8 +347,31 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const handleRetryFailed = useCallback((failedPayments: UploadedPaymentInstruction[]) => {
-    const rows = failedPayments.map((instruction, index) => ({
+  const handleRetryFailed = useCallback((failedPayments: PaymentInstruction[]) => {
+    const validPayments = failedPayments.filter((p) => {
+      try {
+        return validatePaymentInstruction(p).valid;
+      } catch {
+        return false;
+      }
+    });
+
+    const droppedCount = failedPayments.length - validPayments.length;
+    if (droppedCount > 0) {
+      toast.warning(`Dropped ${droppedCount} invalid payment instruction(s) from retry list.`);
+    }
+
+    if (validPayments.length === 0) {
+      toast.error("No valid payments found to retry.");
+      return;
+    }
+
+    const uploadedPayments: UploadedPaymentInstruction[] = validPayments.map((p, idx) => ({
+      ...p,
+      rowIndex: p.rowIndex ?? (idx + 1),
+    }));
+
+    const rows = uploadedPayments.map((instruction, index) => ({
       rowNumber: index + 1,
       instruction,
       valid: true,
@@ -348,10 +379,10 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
 
     setValidationResult({
       rows,
-      validPayments: failedPayments,
+      validPayments: uploadedPayments,
       invalidCount: 0,
     });
-    setSummary(getBatchSummary(failedPayments));
+    setSummary(getBatchSummary(uploadedPayments));
     setSkippedIndices([]);
     setConvertedIndices([]);
     setStep(2);
@@ -359,6 +390,22 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
       "Loaded failed payments for retry. Review before resubmitting.",
     );
   }, []);
+
+  useEffect(() => {
+    const savedFailed = sessionStorage.getItem("retry_failed_payments");
+    if (savedFailed) {
+      try {
+        const parsed = JSON.parse(savedFailed);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          handleRetryFailed(parsed);
+        }
+      } catch (e) {
+        console.error("Failed to restore retry_failed_payments:", e);
+      } finally {
+        sessionStorage.removeItem("retry_failed_payments");
+      }
+    }
+  }, [handleRetryFailed]);
 
   const handleFileSelect = useCallback(async (
     selectedFile: File,
@@ -420,8 +467,19 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
     setStep(2);
   }, [manualPayments]);
 
+  const hasActiveJob = useMemo(
+    () => isSubmissionBlocked({ isSubmitting, jobId, jobStatus }),
+    [isSubmitting, jobId, jobStatus],
+  );
+
   const onSubmit = useCallback(async (filteredPayments: PaymentInstruction[]) => {
     if (!publicKey) return;
+    if (isSubmissionBlocked({ isSubmitting, jobId, jobStatus })) {
+      toast.error(
+        "A batch submission is already in progress. Please wait for it to finish before submitting again.",
+      );
+      return;
+    }
     setIsSubmitting(true);
     try {
       const response = await fetch("/api/batch-submit", {
@@ -448,6 +506,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
       setJobStatus("queued");
       setCompletedBatches(0);
       setTotalBatches(0);
+      await walletSession?.ensureSession();
       startPolling(data.jobId, publicKey);
     } catch (error) {
       console.error("Batch submission error:", error);
@@ -458,7 +517,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
           : "Failed to submit batch",
       );
     }
-  }, [publicKey, network, startPolling]);
+  }, [publicKey, network, startPolling, isSubmitting, jobId, jobStatus]);
 
   return (
     <BatchFlowContext.Provider
@@ -479,6 +538,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
         setSummary,
         isSubmitting,
         setIsSubmitting,
+        hasActiveJob,
         result,
         setResult,
         jobId,

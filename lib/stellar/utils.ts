@@ -139,6 +139,86 @@ export function amountToStroopsI128(amount: string): bigint {
 }
 
 /**
+ * Thrown when an amount string has more fractional digits than the target
+ * token supports. Callers can catch this specifically to surface a
+ * precision-specific message instead of a generic parse failure (#712).
+ */
+export class ExcessTokenPrecisionError extends Error {
+  constructor(
+    public readonly amount: string,
+    public readonly tokenDecimals: number,
+  ) {
+    super(
+      `Invalid amount: "${amount}" has more than ${tokenDecimals} decimal places`
+    )
+    this.name = 'ExcessTokenPrecisionError'
+  }
+}
+
+/**
+ * Parses an amount string into a Big instance for a token with an arbitrary
+ * number of decimal places (6, 7, 18, ...).
+ *
+ * Generalizes {@link parseStellarAmount} for Soroban token contracts whose
+ * `decimals()` differs from the classic 7-decimal Stellar scale (#712).
+ * Unlike {@link parseStellarAmount}, this does not enforce the classic
+ * Horizon int64 amount ceiling, since Soroban token amounts are i128 and are
+ * not bound by that limit.
+ *
+ * @param s - The amount string to parse (e.g. "100.123456")
+ * @param decimals - The token's decimal precision
+ * @throws {ExcessTokenPrecisionError} if `s` has more fractional digits than `decimals`
+ * @throws {Error} if `s` is not a valid non-negative finite decimal string
+ */
+export function parseTokenAmount(s: string, decimals: number): Big {
+  if (typeof s !== 'string' || s.trim() === '') {
+    throw new Error(`Invalid amount: expected non-empty string, got ${JSON.stringify(s)}`)
+  }
+
+  // Reject scientific notation for the same reason as parseStellarAmount.
+  if (s.includes('e') || s.includes('E')) {
+    throw new Error(`Invalid amount: scientific notation not allowed: "${s}"`)
+  }
+
+  let amount: Big
+  try {
+    amount = new Big(s)
+  } catch {
+    throw new Error(`Invalid amount: "${s}" is not a valid number`)
+  }
+
+  if (amount.lt(0)) {
+    throw new Error(`Invalid amount: negative amounts not allowed: "${s}"`)
+  }
+
+  const decimalPart = s.split('.')[1]
+  if (decimalPart && decimalPart.length > decimals) {
+    throw new ExcessTokenPrecisionError(s, decimals)
+  }
+
+  return amount
+}
+
+/**
+ * Converts a human-readable token amount string into an i128 bigint, scaled
+ * by the token's own `decimals` rather than the fixed 7-decimal Stellar
+ * scale (#712). Uses big.js decimal arithmetic — never floating point — so
+ * the conversion is exact for any decimal count.
+ *
+ * @example
+ * amountToTokenStroopsI128("1", 6)   // → 1000000n
+ * amountToTokenStroopsI128("1", 7)   // → 10000000n
+ * amountToTokenStroopsI128("1", 18)  // → 1000000000000000000n
+ */
+export function amountToTokenStroopsI128(amount: string, decimals: number): bigint {
+  const value = parseTokenAmount(amount, decimals)
+  const scale = new Big(10).pow(decimals)
+  // decimals is guaranteed by parseTokenAmount, so this multiplication is exact.
+  const stroops = value.times(scale).round(0)
+  return BigInt(stroops.toFixed(0))
+}
+
+/**
  * Formats a Big instance back to a Stellar-compatible amount string.
  * Always produces exactly 7 decimal places.
  *

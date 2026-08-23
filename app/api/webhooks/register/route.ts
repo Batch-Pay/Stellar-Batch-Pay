@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
   const authError = requireApiKey(request);
   if (authError) return authError;
 
-  const rate = applyRateLimit(request, "webhook-register");
+  const rate = await applyRateLimit(request, "webhook-register");
   if (rate.blocked) return rate.response!;
 
   try {
@@ -104,7 +104,7 @@ export async function DELETE(request: NextRequest) {
   const authError = requireApiKey(request);
   if (authError) return authError;
 
-  const rate = applyRateLimit(request, "webhook-register");
+  const rate = await applyRateLimit(request, "webhook-register");
   if (rate.blocked) return rate.response!;
 
   const { searchParams } = new URL(request.url);

@@ -9,17 +9,34 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { StrKey } from "stellar-sdk";
 import { getJob } from "@/lib/job-store";
 import { safeJsonResponse } from "@/lib/safe-json";
+import { requireWalletAuth } from "@/lib/wallet-auth";
+import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
+import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
 
 export async function GET(request: NextRequest) {
+  // #743: batch-recover returns per-job success/failure detail and is
+  // enumerable by jobId, so it's rate-limited like the other job-detail
+  // polling endpoints before any lookup happens.
+  const rate = await applyRateLimit(request, "batch-recover");
+  if (rate.blocked) return rate.response!;
+
+  const response = await handleRecover(request);
+  return setRateLimitHeaders(response, rate);
+}
+
+async function handleRecover(request: NextRequest): Promise<NextResponse> {
+  const requestId = getRequestId(request);
+
   try {
     const { searchParams } = new URL(request.url);
     const jobId = searchParams.get("jobId");
 
     if (!jobId || typeof jobId !== "string") {
       return NextResponse.json(
-        { error: "jobId is required" },
+        { error: "jobId is required", code: "BAD_REQUEST", requestId },
         { status: 400 },
       );
     }
@@ -27,19 +44,36 @@ export async function GET(request: NextRequest) {
     const publicKey = searchParams.get("publicKey");
     if (!publicKey) {
       return NextResponse.json(
-        { error: "publicKey is required" },
+        { error: "publicKey is required", code: "BAD_REQUEST", requestId },
         { status: 400 },
+      );
+    }
+
+    if (!StrKey.isValidEd25519PublicKey(publicKey)) {
+      return NextResponse.json(
+        { error: "A valid publicKey is required" },
+        { status: 400 },
+      );
+    }
+
+    const auth = requireWalletAuth(request, publicKey);
+    if (!auth.valid) {
+      return NextResponse.json(
+        { error: auth.error },
+        { status: auth.status ?? 401 },
       );
     }
 
     // Always scope lookup to the owning wallet — return 404 on mismatch to
     // avoid leaking whether a jobId exists at all (IDOR prevention, #538).
-    const job = getJob(jobId, publicKey);
+    const job = await getJob(jobId, publicKey);
 
     if (!job || !job.result) {
       return safeJsonResponse(
         {
           error: "Batch not found or not completed yet",
+          code: "NOT_FOUND",
+          requestId,
           jobId,
         },
         { status: 404 },
@@ -72,17 +106,11 @@ export async function GET(request: NextRequest) {
       ready: failedTransactions.length > 0,
     });
   } catch (error: unknown) {
-    console.error("Batch recovery error:", error);
-
-    return safeJsonResponse(
-      {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to recover batch information",
-      },
-      { status: 500 },
-    );
+    return sanitizedErrorResponse(error, {
+      requestId,
+      status: 500,
+      logMessage: "Batch recovery error",
+      extraFields: { success: false },
+    });
   }
 }

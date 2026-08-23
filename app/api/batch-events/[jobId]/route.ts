@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { StrKey } from "stellar-sdk";
 import { getJob } from "@/lib/job-store";
 import { applyRateLimit } from "@/lib/api-rate-limit";
+import { requireWalletAuth } from "@/lib/wallet-auth";
 
 interface RouteParams {
   params: Promise<{ jobId: string }>;
@@ -19,7 +20,7 @@ interface RouteParams {
 
 const POLL_INTERVAL_MS = 1000;
 
-function serializeJobEvent(job: ReturnType<typeof getJob>): string {
+function serializeJobEvent(job: Awaited<ReturnType<typeof getJob>>): string {
   if (!job) return "";
   const payload = JSON.stringify({
     jobId: job.jobId,
@@ -37,7 +38,7 @@ function serializeJobEvent(job: ReturnType<typeof getJob>): string {
 }
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
-  const rate = applyRateLimit(request, "batch-events");
+  const rate = await applyRateLimit(request, "batch-events");
   if (rate.blocked) return rate.response!;
 
   const { jobId } = await params;
@@ -57,14 +58,27 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     );
   }
 
+  const auth = requireWalletAuth(request, publicKey);
+  if (!auth.valid) {
+    return new Response(JSON.stringify({ error: auth.error }), {
+      status: auth.status ?? 401,
+      headers: {
+        "Content-Type": "application/json",
+        "X-RateLimit-Remaining": String(rate.remaining),
+        "X-RateLimit-Limit": String(rate.limit),
+        "X-RateLimit-Reset": String(rate.resetAt),
+      },
+    });
+  }
+
   const encoder = new TextEncoder();
   let intervalId: ReturnType<typeof setInterval> | null = null;
 
   const stream = new ReadableStream({
     start(controller) {
-      const tick = () => {
+      const tick = async () => {
         try {
-          const job = getJob(jobId, publicKey);
+          const job = await getJob(jobId, publicKey);
 
           if (!job) {
             const errEvent = `data: ${JSON.stringify({ error: `Job not found: ${jobId}` })}\n\n`;

@@ -21,6 +21,8 @@ import { StrKey } from "stellar-sdk";
 import { getAllJobs, countJobs, getBatchHistorySummary } from "@/lib/job-store";
 import { safeJsonResponse } from "@/lib/safe-json";
 import type { JobStatus, BatchJobNetwork } from "@/lib/stellar/types";
+import { requireWalletAuth } from "@/lib/wallet-auth";
+import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
 
 function parseIsoTimestamp(value: string | null): string | undefined {
   if (!value) return undefined;
@@ -30,6 +32,17 @@ function parseIsoTimestamp(value: string | null): string | undefined {
 }
 
 export async function GET(request: NextRequest) {
+  // #743: history supports free-text search and aggregate summaries across a
+  // wallet's full job set, which is enumerable and heavier than a single
+  // status poll, so it's rate-limited before running any query.
+  const rate = await applyRateLimit(request, "batch-history");
+  if (rate.blocked) return rate.response!;
+
+  const response = await handleHistory(request);
+  return setRateLimitHeaders(response, rate);
+}
+
+async function handleHistory(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = request.nextUrl;
 
   const page   = Math.max(1, parseInt(searchParams.get("page")  ?? "1", 10));
@@ -53,6 +66,14 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const auth = requireWalletAuth(request, publicKey);
+  if (!auth.valid) {
+    return NextResponse.json(
+      { error: auth.error },
+      { status: auth.status ?? 401 },
+    );
+  }
+
   const validStatuses: JobStatus[] = ["queued", "processing", "completed", "failed"];
   const status  = validStatuses.includes(rawStatus as JobStatus) ? (rawStatus as JobStatus) : undefined;
   const network: BatchJobNetwork | undefined =
@@ -61,14 +82,14 @@ export async function GET(request: NextRequest) {
   try {
     const filters = { status, network, publicKey, search, from, to, sort: sort ?? undefined, order: order ?? undefined };
 
-    const [jobs, total] = [
+    const [jobs, total] = await Promise.all([
       getAllJobs({ limit, offset, ...filters }),
       countJobs(filters),
-    ];
+    ]);
 
     const summary = includeSummary
-      ? (() => {
-          const stats = getBatchHistorySummary(filters);
+      ? await (async () => {
+          const stats = await getBatchHistorySummary(filters);
           return {
             totalJobs: stats.totalJobs,
             totalPayments: stats.totalPayments,

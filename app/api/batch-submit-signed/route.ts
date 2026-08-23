@@ -21,6 +21,8 @@ import {
     isInsufficientFeeError,
 } from "@/lib/stellar/submit-errors";
 import { getXdrSourceAccount, operationCountOf } from "@/lib/stellar/xdr-source";
+import { getRequestId, sanitizedErrorResponse } from "@/lib/api-error";
+import { logger } from "@/lib/logger";
 
 interface RequestBody {
     signedXdr: string;
@@ -46,8 +48,10 @@ async function getFeeStats(server: Horizon.Server): Promise<FeeStats> {
 }
 
 export async function POST(request: NextRequest) {
-    const rate = applyRateLimit(request, "batch-submit-signed");
+    const rate = await applyRateLimit(request, "batch-submit-signed");
     if (rate.blocked) return rate.response!;
+
+    const requestId = getRequestId(request);
 
     try {
         const body = (await request.json()) as RequestBody;
@@ -152,23 +156,41 @@ export async function POST(request: NextRequest) {
             throw submissionError;
         }
     } catch (error: unknown) {
-        console.error("Submit signed tx error:", error);
+        // Horizon result codes (e.g. tx_failed / op_underfunded) are stable,
+        // documented codes, not internal details — safe to surface so the
+        // client can react. Anything else (JSON parse failures, malformed
+        // XDR, unexpected errors) is sanitized: only a generic message, a
+        // stable code, and requestId go to the client; full detail is logged
+        // server-side (#748).
+        const classified = classifySubmitError(error);
 
-        // Extract Horizon-specific error details if available
-        const horizonExtras =
-            error && typeof error === "object" && "response" in error
-                ? (error as { response?: { data?: { extras?: { result_codes?: unknown } } } })
-                    .response?.data?.extras?.result_codes
-                : undefined;
+        if (classified.code !== "UNKNOWN") {
+            logger.error(
+                { requestId },
+                "Submit signed tx error (classified)",
+                error,
+            );
+            return setRateLimitHeaders(safeJsonResponse(
+                {
+                    success: false,
+                    error: classified.message,
+                    code: classified.code,
+                    action: classified.action,
+                    resultCodes: classified.resultCodes,
+                    requestId,
+                },
+                { status: 400 },
+            ), rate);
+        }
 
-        return setRateLimitHeaders(safeJsonResponse(
-            {
-                success: false,
-                error:
-                    error instanceof Error ? error.message : "Transaction submission failed",
-                resultCodes: horizonExtras,
-            },
-            { status: 400 },
-        ), rate);
+        return setRateLimitHeaders(
+            sanitizedErrorResponse(error, {
+                requestId,
+                status: 400,
+                logMessage: "Submit signed tx error",
+                extraFields: { success: false },
+            }),
+            rate,
+        );
     }
 }

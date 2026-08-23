@@ -34,6 +34,7 @@ const METADATA_HOSTNAME_RE =
 
 const REDIRECT_BLOCKED_ERROR = "Webhook delivery blocked: redirects are not allowed.";
 const RESOLUTION_BLOCKED_PREFIX = "Webhook delivery blocked:";
+export const WEBHOOK_TIMEOUT_MS = 5_000;
 
 /**
  * Decode all common IP obfuscation forms to a dotted-decimal string.
@@ -406,6 +407,7 @@ export async function triggerWebhooks(eventName: string, payload: any) {
         const response = await fetch(webhook.url, {
           method: "POST",
           redirect: "error",
+          signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
           headers: {
             "Content-Type": "application/json",
             "X-Stellar-Batch-Pay-Event": eventName,
@@ -463,6 +465,7 @@ export async function triggerWebhooksWithRetry(
           const response = await fetch(webhook.url, {
             method: "POST",
             redirect: "error",
+            signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
             headers: {
               "Content-Type": "application/json",
               "X-Stellar-Batch-Pay-Event": eventName,
@@ -472,7 +475,7 @@ export async function triggerWebhooksWithRetry(
           });
 
           if (response.ok) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,
@@ -485,7 +488,7 @@ export async function triggerWebhooksWithRetry(
 
           // 4xx — don't retry
           if (response.status < 500) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,
@@ -499,7 +502,7 @@ export async function triggerWebhooksWithRetry(
 
           // 5xx — fall through to retry
           if (attempt === MAX_RETRIES) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,
@@ -513,7 +516,7 @@ export async function triggerWebhooksWithRetry(
         } catch (err) {
           const errorMessage = getWebhookDeliveryError(err);
           if (isNonRetryableWebhookError(err)) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,
@@ -525,7 +528,7 @@ export async function triggerWebhooksWithRetry(
           }
 
           if (attempt === MAX_RETRIES) {
-            logWebhookDelivery({
+            await logWebhookDelivery({
               webhookId: webhook.id,
               jobId,
               event: eventName,

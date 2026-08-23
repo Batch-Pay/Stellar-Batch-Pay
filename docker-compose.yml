@@ -24,8 +24,27 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - SOROBAN_RPC_URL=http://stellar:8001
-      - NEXT_PUBLIC_HORIZON_URL=http://stellar:8000
+      # These names must match what lib/stellar/network-config.ts and
+      # lib/stellar/vesting-config.ts actually read (see .env.example) —
+      # unprefixed names without a _TESTNET/_MAINNET/_FUTURENET suffix are
+      # silently ignored by the resolvers, which then fall back to the
+      # public SDF endpoints instead of this local quickstart node.
+      - NEXT_PUBLIC_STELLAR_NETWORK=testnet
+      # Server-side (container-to-container) endpoints.
+      - HORIZON_URL_TESTNET=http://stellar:8000
+      - SOROBAN_RPC_URL_TESTNET=http://stellar:8001
+      # Client-side (browser-to-host) endpoints — the browser runs outside
+      # the compose network, so it must reach the mapped host ports instead
+      # of the "stellar" service hostname.
+      - NEXT_PUBLIC_HORIZON_URL_TESTNET=http://localhost:8000
+      - NEXT_PUBLIC_SOROBAN_RPC_URL_TESTNET=http://localhost:8001
+      # Deploy the vesting contract to the local standalone network first
+      # (see DEVELOPMENT.md), then export CONTRACT_ID_TESTNET in your shell
+      # (or a .env file next to this compose file) before `docker compose
+      # up`. Pages that resolve the vesting contract will error at request
+      # time until this is set — see lib/stellar/vesting-config.ts.
+      - CONTRACT_ID_TESTNET=${CONTRACT_ID_TESTNET:-}
+      - NEXT_PUBLIC_CONTRACT_ID_TESTNET=${CONTRACT_ID_TESTNET:-}
       - NODE_ENV=production
     depends_on:
       - stellar

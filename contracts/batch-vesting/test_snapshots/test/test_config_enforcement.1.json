@@ -67,7 +67,7 @@
                         "symbol": "upgrade_timelock"
                       },
                       "val": {
-                        "u64": 100
+                        "u64": 86400
                       }
                     }
                   ]
@@ -229,7 +229,7 @@
                         "symbol": "upgrade_timelock"
                       },
                       "val": {
-                        "u64": 100
+                        "u64": 86400
                       }
                     }
                   ]

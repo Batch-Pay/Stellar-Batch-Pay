@@ -6,15 +6,30 @@
  * publicKey is now required and job lookup is always ownership-scoped.
  */
 
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+import { Keypair, Networks } from "stellar-sdk";
+import { NextRequest } from "next/server";
 
 process.env.JOB_STORE_PATH = ":memory:";
+process.env.WALLET_AUTH_SECRET = "test-wallet-auth-secret-recover";
+process.env.WALLET_AUTH_HOME_DOMAIN = "localhost";
+process.env.WALLET_AUTH_WEB_AUTH_DOMAIN = "stellar-batch-pay-recover-test";
+process.env.WALLET_AUTH_NETWORK_PASSPHRASE = Networks.TESTNET;
+
+// #743: exercise batch-recover's own business logic without being
+// throttled by the newly-added rate limit; 429 behavior is covered
+// separately in tests/api-rate-limit-endpoints.test.ts.
+vi.mock("@/lib/api-rate-limit", () => ({
+  applyRateLimit: vi.fn(() => ({ blocked: false, response: undefined })),
+  setRateLimitHeaders: vi.fn((response: Response) => response),
+}));
 
 import { createJob, updateJob } from "@/lib/job-store";
 import { GET } from "@/app/api/batch-recover/route";
+import { createTestWalletSession } from "@/lib/wallet-auth";
 import type { BatchResult } from "@/lib/stellar/types";
 
-const PUBLIC_KEY = "GDQERHRWJYV7JHRP5V7DWJVI6Y5ABZP3YRH7DKYJRBEGJQKE6IQEOSY2";
+let PUBLIC_KEY: string;
 
 const completedResult: BatchResult = {
   batchId: "test-batch",
@@ -30,18 +45,23 @@ const completedResult: BatchResult = {
   summary: { successful: 1, failed: 1 },
 };
 
-function makeRequest(params: Record<string, string>) {
+function makeRequest(params: Record<string, string>, publicKeyForAuth?: string) {
   const url = new URL("http://localhost/api/batch-recover");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  return new Request(url.toString());
+  const authKey = publicKeyForAuth ?? params.publicKey;
+  const headers: HeadersInit | undefined = authKey
+    ? { Authorization: `Bearer ${createTestWalletSession(authKey)}` }
+    : undefined;
+  return new NextRequest(url.toString(), { headers });
 }
 
 describe("GET /api/batch-recover", () => {
   let jobId: string;
 
-  beforeEach(() => {
-    jobId = createJob([], "testnet", PUBLIC_KEY);
-    updateJob(jobId, { status: "completed", result: completedResult });
+  beforeEach(async () => {
+    PUBLIC_KEY = Keypair.random().publicKey();
+    jobId = await createJob([], "testnet", PUBLIC_KEY);
+    await updateJob(jobId, { status: "completed", result: completedResult });
   });
 
   test("returns 200 with recovery data for a completed SQLite job", async () => {
@@ -83,8 +103,18 @@ describe("GET /api/batch-recover", () => {
     expect(body.error).toMatch(/publicKey/i);
   });
 
+  test("returns 401 when publicKey is supplied without wallet authentication", async () => {
+    const url = new URL("http://localhost/api/batch-recover");
+    url.searchParams.set("jobId", jobId);
+    url.searchParams.set("publicKey", PUBLIC_KEY);
+    const res = await GET(new NextRequest(url.toString()) as never);
+
+    expect(res.status).toBe(401);
+  });
+
   test("returns 404 when publicKey does not match the job owner", async () => {
-    const res = await GET(makeRequest({ jobId, publicKey: "GCCC" }) as never);
+    const otherKey = Keypair.random().publicKey();
+    const res = await GET(makeRequest({ jobId, publicKey: otherKey }, otherKey) as never);
 
     expect(res.status).toBe(404);
   });
@@ -96,12 +126,79 @@ describe("GET /api/batch-recover", () => {
   });
 
   test("does not leak job data for a valid jobId with wrong publicKey (#538)", async () => {
-    const otherKey = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
-    const res = await GET(makeRequest({ jobId, publicKey: otherKey }) as never);
+    const otherKey = Keypair.random().publicKey();
+    const res = await GET(makeRequest({ jobId, publicKey: otherKey }, otherKey) as never);
     const body = await res.json();
 
     expect(res.status).toBe(404);
     expect(body).not.toHaveProperty("successfulTransactions");
     expect(body).not.toHaveProperty("failedTransactions");
+  });
+
+  test("includes a requestId on the 404 not-found response", async () => {
+    const res = await GET(
+      makeRequest({ jobId: "does-not-exist", publicKey: PUBLIC_KEY }) as never,
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(typeof body.requestId).toBe("string");
+    expect(body.requestId.length).toBeGreaterThan(0);
+  });
+});
+
+describe("GET /api/batch-recover — sanitized error responses (#748)", () => {
+  test("forced throw returns a sanitized body with no leaked internals", async () => {
+    const sensitiveMessage =
+      "ENOENT: no such file or directory, open '/var/data/batch-pay.sqlite'";
+    const jobStore = await import("@/lib/job-store");
+    const getJobSpy = vi
+      .spyOn(jobStore, "getJob")
+      .mockRejectedValueOnce(new Error(sensitiveMessage));
+
+    const res = await GET(
+      makeRequest({ jobId: "some-job", publicKey: PUBLIC_KEY }) as never,
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.success).toBe(false);
+    expect(body.code).toBe("INTERNAL_ERROR");
+    expect(typeof body.requestId).toBe("string");
+    expect(body.requestId.length).toBeGreaterThan(0);
+
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("ENOENT");
+    expect(raw).not.toContain("/var/data");
+    expect(raw).not.toContain("batch-pay.sqlite");
+    expect(raw).not.toContain(".ts:");
+    expect(body).not.toHaveProperty("stack");
+
+    getJobSpy.mockRestore();
+  });
+
+  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
+    const jobStore = await import("@/lib/job-store");
+    const getJobSpy = vi
+      .spyOn(jobStore, "getJob")
+      .mockRejectedValueOnce(new Error("boom"));
+
+    const url = new URL("http://localhost/api/batch-recover");
+    url.searchParams.set("jobId", "some-job");
+    url.searchParams.set("publicKey", PUBLIC_KEY);
+    const req = new NextRequest(url.toString(), {
+      headers: {
+        "x-request-id": "trace-abc-123",
+        Authorization: `Bearer ${createTestWalletSession(PUBLIC_KEY)}`,
+      },
+    });
+
+    const res = await GET(req as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.requestId).toBe("trace-abc-123");
+
+    getJobSpy.mockRestore();
   });
 });

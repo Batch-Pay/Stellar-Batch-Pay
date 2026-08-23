@@ -12,6 +12,8 @@ import {
   formatStellarAmount,
   sumStellarAmounts,
   amountToStroopsI128,
+  amountToTokenStroopsI128,
+  ExcessTokenPrecisionError,
 } from "../lib/stellar/utils";
 
 // ---------------------------------------------------------------------------
@@ -207,5 +209,83 @@ describe("amountToStroopsI128 — exact stroop values", () => {
 
   test("rejects negative amounts", () => {
     expect(() => amountToStroopsI128("-1")).toThrow(/negative/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// amountToTokenStroopsI128 — token-decimal-aware conversion (#712)
+// ---------------------------------------------------------------------------
+
+describe("amountToTokenStroopsI128 — token-specific decimal scaling", () => {
+  test("6-decimal token: '1' encodes to 1_000_000", () => {
+    expect(amountToTokenStroopsI128("1", 6)).toBe(1_000_000n);
+  });
+
+  test("7-decimal token: '1' encodes to 10_000_000 (matches classic scale)", () => {
+    expect(amountToTokenStroopsI128("1", 7)).toBe(10_000_000n);
+  });
+
+  test("18-decimal token: '1' encodes to 1_000_000_000_000_000_000", () => {
+    expect(amountToTokenStroopsI128("1", 18)).toBe(1_000_000_000_000_000_000n);
+  });
+
+  test("6-decimal token: fractional amount at max precision", () => {
+    expect(amountToTokenStroopsI128("0.123456", 6)).toBe(123_456n);
+  });
+
+  test("18-decimal token: fractional amount at max precision", () => {
+    expect(amountToTokenStroopsI128("0.000000000000000001", 18)).toBe(1n);
+  });
+
+  test("rejects amounts with more decimal places than the token supports", () => {
+    // Token has 6 decimals; input supplies a 7th fractional digit.
+    expect(() => amountToTokenStroopsI128("0.1234567", 6)).toThrow(
+      ExcessTokenPrecisionError,
+    );
+    expect(() => amountToTokenStroopsI128("0.1234567", 6)).toThrow(
+      /more than 6 decimal places/,
+    );
+  });
+
+  test("does not silently truncate excess precision", () => {
+    // If this ever silently rounded instead of throwing, it would produce
+    // 123457n (rounded) — assert it throws instead.
+    let thrown: unknown;
+    try {
+      amountToTokenStroopsI128("0.1234567", 6);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ExcessTokenPrecisionError);
+  });
+
+  test("ExcessTokenPrecisionError carries the offending amount and token decimals", () => {
+    try {
+      amountToTokenStroopsI128("0.1234567", 6);
+      throw new Error("expected amountToTokenStroopsI128 to throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ExcessTokenPrecisionError);
+      const err = e as ExcessTokenPrecisionError;
+      expect(err.amount).toBe("0.1234567");
+      expect(err.tokenDecimals).toBe(6);
+    }
+  });
+
+  test("rejects negative amounts regardless of decimals", () => {
+    expect(() => amountToTokenStroopsI128("-1", 18)).toThrow(/negative/);
+  });
+
+  test("rejects scientific notation regardless of decimals", () => {
+    expect(() => amountToTokenStroopsI128("1e7", 6)).toThrow(
+      /scientific notation/,
+    );
+  });
+
+  test("accepts a value that would exceed the classic Horizon int64 cap (no cap for generic tokens)", () => {
+    // Classic parseStellarAmount rejects amounts above 922337203685.4775807;
+    // a generic i128 Soroban token has no such ceiling.
+    expect(() =>
+      amountToTokenStroopsI128("922337203685.4775808", 7),
+    ).not.toThrow();
   });
 });

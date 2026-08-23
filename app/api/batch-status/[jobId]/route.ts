@@ -12,13 +12,14 @@ import { StrKey } from "stellar-sdk";
 import { getJob } from "@/lib/job-store";
 import { safeJsonResponse } from "@/lib/safe-json";
 import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
+import { requireWalletAuth } from "@/lib/wallet-auth";
 
 interface RouteParams {
   params: Promise<{ jobId: string }>;
 }
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
-  const rate = applyRateLimit(request, "batch-status");
+  const rate = await applyRateLimit(request, "batch-status");
   if (rate.blocked) return rate.response!;
 
   const { jobId } = await params;
@@ -44,7 +45,15 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     );
   }
 
-  const job = getJob(jobId, publicKey);
+  const auth = requireWalletAuth(request, publicKey);
+  if (!auth.valid) {
+    return setRateLimitHeaders(
+      NextResponse.json({ error: auth.error }, { status: auth.status ?? 401 }),
+      rate,
+    );
+  }
+
+  const job = await getJob(jobId, publicKey);
 
   if (!job) {
     return setRateLimitHeaders(

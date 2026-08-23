@@ -18,6 +18,9 @@ const PAUSE_CLAIM: u32 = 1 << 1;
 const PAUSE_REVOKE: u32 = 1 << 2;
 
 const UPGRADE_TIMELOCK: u64 = 7 * 24 * 60 * 60; // 7 days in seconds
+/// #699: Hard-coded floor for upgrade_timelock. No admin can reduce the
+/// upgrade review window below this value, preventing immediate WASM swaps.
+const MIN_UPGRADE_TIMELOCK: u64 = 24 * 60 * 60; // 1 day in seconds
 
 #[contract]
 pub struct BatchVestingContract;
@@ -154,6 +157,8 @@ pub enum VestingError {
     InvalidInput = 18,
     /// #543: Provided fee asset is not the whitelisted token from contract config.
     InvalidToken = 19,
+    /// #699: upgrade_timelock is below MIN_UPGRADE_TIMELOCK.
+    TimelockTooShort = 20,
 }
 
 impl BatchVestingContract {
@@ -793,8 +798,15 @@ impl BatchVestingContract {
     ///
     /// #543: The `fee_asset` field sets the single whitelisted token for fee
     /// collection. Once set, fees can only be collected in this token.
+    ///
+    /// #699: `upgrade_timelock` must be at least MIN_UPGRADE_TIMELOCK (1 day).
+    /// This prevents an admin from reducing the upgrade review window to zero
+    /// and executing a WASM swap immediately after proposing it.
     pub fn set_config(env: Env, admin: Address, config: Config) {
         Self::require_current_admin(&env, &admin);
+        if config.upgrade_timelock < MIN_UPGRADE_TIMELOCK {
+            soroban_sdk::panic_with_error!(&env, VestingError::TimelockTooShort);
+        }
         Self::set_config_internal(&env, &config);
 
         env.events().publish(

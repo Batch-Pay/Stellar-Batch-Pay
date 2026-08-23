@@ -145,3 +145,70 @@ describe("POST /api/batch-build — omitted rows (#510)", () => {
     expect(json.omittedRows).toEqual([1]);
   });
 });
+
+describe("POST /api/batch-build — sanitized error responses (#748)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("a forced Horizon/loadAccount failure never leaks error.message or a stack trace", async () => {
+    const { POST } = await import("@/app/api/batch-build/route");
+
+    const sensitiveMessage =
+      "getaddrinfo ENOTFOUND horizon-internal.batchpay.svc.cluster.local";
+    mockLoadAccount.mockImplementation(() =>
+      Promise.reject(new Error(sensitiveMessage)),
+    );
+
+    const owner = Keypair.random().publicKey();
+    const recipient = Keypair.random().publicKey();
+    const payments: PaymentInstruction[] = [
+      { address: recipient, amount: "1", asset: "XLM", rowIndex: 0 },
+    ];
+
+    const response = await POST(
+      makeRequest({ payments, network: "testnet", publicKey: owner }) as never,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.code).toBe("INTERNAL_ERROR");
+    expect(typeof body.requestId).toBe("string");
+    expect(body.requestId.length).toBeGreaterThan(0);
+
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("ENOTFOUND");
+    expect(raw).not.toContain("batchpay.svc.cluster.local");
+    expect(raw).not.toContain(".ts:");
+    expect(body).not.toHaveProperty("stack");
+  });
+
+  test("echoes back a client-supplied x-request-id header on a forced throw", async () => {
+    const { POST } = await import("@/app/api/batch-build/route");
+
+    mockLoadAccount.mockImplementation(() =>
+      Promise.reject(new Error("boom")),
+    );
+
+    const owner = Keypair.random().publicKey();
+    const recipient = Keypair.random().publicKey();
+    const payments: PaymentInstruction[] = [
+      { address: recipient, amount: "1", asset: "XLM", rowIndex: 0 },
+    ];
+
+    const req = new Request("http://localhost/api/batch-build", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-request-id": "trace-build-1",
+      },
+      body: JSON.stringify({ payments, network: "testnet", publicKey: owner }),
+    });
+
+    const response = await POST(req as never);
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.requestId).toBe("trace-build-1");
+  });
+});

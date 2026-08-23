@@ -52,13 +52,13 @@ describe('Issue #386: createJob persists signedTransactions', () => {
       },
     ];
 
-    const jobId = jobStore.createJob(
+    const jobId = await jobStore.createJob(
       payments,
       'testnet',
       'GDQERHRWJYV7JHRP5V7DWJVI6Y5ABZP3YRH7DKYJRBEGJQKE6IQEOSY2',
       signedXdrs
     );
-    const job = jobStore.getJob(jobId);
+    const job = await jobStore.getJob(jobId);
 
     expect(job).toBeDefined();
     expect(job?.signedTransactions).toEqual(signedXdrs);
@@ -75,12 +75,12 @@ describe('Issue #386: createJob persists signedTransactions', () => {
       },
     ];
 
-    const jobId = jobStore.createJob(
+    const jobId = await jobStore.createJob(
       payments,
       'testnet',
       'GDQERHRWJYV7JHRP5V7DWJVI6Y5ABZP3YRH7DKYJRBEGJQKE6IQEOSY2'
     );
-    const job = jobStore.getJob(jobId);
+    const job = await jobStore.getJob(jobId);
 
     expect(job?.signedTransactions).toBeUndefined();
   });
@@ -263,5 +263,27 @@ describe('Issue #608: dashboard notification formatting', () => {
       description: 'The mainnet batch failed: Insufficient balance',
       href: '/dashboard/history/job-abc',
     });
+  });
+});
+
+// Test #735: Insufficient fee retry and sessionStorage validation
+describe('Issue #735: Insufficient fee retry and sessionStorage validation', () => {
+  test('validatePaymentInstruction is exported and behaves correctly', async () => {
+    const { validatePaymentInstruction } = await import('../lib/stellar/validator');
+    const { Keypair } = await import('stellar-sdk');
+    
+    const validResult = validatePaymentInstruction({
+      address: Keypair.random().publicKey(),
+      amount: '100',
+      asset: 'XLM',
+    });
+    expect(validResult.valid).toBe(true);
+
+    const invalidResult = validatePaymentInstruction({
+      address: '',
+      amount: '100',
+      asset: 'XLM',
+    });
+    expect(invalidResult.valid).toBe(false);
   });
 });

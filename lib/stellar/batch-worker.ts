@@ -19,9 +19,11 @@ import type {
 } from "./types";
 import { Horizon, TransactionBuilder, Networks } from "stellar-sdk";
 import { sumStellarAmounts, formatStellarAmount } from "./utils";
+import { computeTransactionHash, isTransportError, reconcileTransaction } from "./reconciliation";
 import { horizonUrl } from "./network-config";
 import { logger } from "../logger";
 import { triggerWebhooksWithRetry } from "../webhooks";
+import { isInsufficientFeeError } from "./submit-errors";
 
 /**
  * Process a batch job in the background. This function must NOT be awaited
@@ -40,13 +42,13 @@ export async function processJobInBackground(
   const MAX_OPS = 100;
 
   try {
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     if (!job) {
       logger.warn({ requestId, jobId }, "Background worker: Job not found");
       return;
     }
     // Atomically claim the job. If claim fails, it means another worker is actively processing it or it is finished.
-    const claimed = claimJobForProcessing(jobId);
+    const claimed = await claimJobForProcessing(jobId);
     if (!claimed) {
       logger.warn({ requestId, jobId, status: job.status }, "Background worker: Duplicate worker run detected. Job is already claimed, processing, or completed. Exiting early.");
       return;
@@ -74,7 +76,7 @@ export async function processJobInBackground(
 
     // #300: Handle pre-signed transactions (client-side signing)
     if (xdrs && xdrs.length > 0) {
-      updateJob(jobId, {
+      await updateJob(jobId, {
         status: "processing",
         totalBatches: xdrs.length,
         completedBatches: 0,
@@ -111,7 +113,7 @@ export async function processJobInBackground(
             status: "failed",
             error: error instanceof Error ? error.message : "Unparseable transaction XDR",
           });
-          incrementCompletedBatches(jobId);
+          await incrementCompletedBatches(jobId);
           continue;
         }
 
@@ -125,24 +127,51 @@ export async function processJobInBackground(
         const recipientCount = batchPayments.length > 0 ? batchPayments.length : opCount;
         totalOps += recipientCount;
 
-        try {
-          // #504: Defense-in-depth — never submit an envelope whose source
-          // account differs from the wallet that owns this job. The submit
-          // route enforces this up-front, but a job recovered from storage is
-          // re-checked here. Skipped when the source can't be determined (older
-          // jobs without a publicKey, or unparseable XDR handled above).
-          if (job.publicKey) {
-            const source = getXdrSourceAccount(xdr, network);
-            if (source !== undefined && source !== job.publicKey) {
-              throw new Error(
-                `Transaction source account ${source} does not match job publicKey ${job.publicKey}`,
-              );
+        // #504: Defense-in-depth — never submit an envelope whose source
+        // account differs from the wallet that owns this job. The submit
+        // route enforces this up-front, but a job recovered from storage is
+        // re-checked here. Skipped when the source can't be determined (older
+        // jobs without a publicKey, or unparseable XDR handled above).
+        if (job.publicKey) {
+          const source = getXdrSourceAccount(xdr, network);
+          if (source !== undefined && source !== job.publicKey) {
+            const mismatchError = `Transaction source account ${source} does not match job publicKey ${job.publicKey}`;
+            if (batchPayments.length > 0) {
+              for (const payment of batchPayments) {
+                allResults.push({
+                  recipient: payment.address,
+                  amount: payment.amount,
+                  asset: payment.asset,
+                  status: "failed",
+                  transactionHash: undefined,
+                  error: mismatchError,
+                });
+              }
+            } else {
+              for (let j = 0; j < recipientCount; j++) {
+                allResults.push({
+                  recipient: `tx-${i}-op-${j}`,
+                  amount: "0",
+                  asset: "XLM",
+                  status: "failed",
+                  transactionHash: undefined,
+                  error: mismatchError,
+                });
+              }
             }
+            failCount += recipientCount;
+            incrementCompletedBatches(jobId);
+            continue;
           }
+        }
 
+        const txHash = computeTransactionHash(tx);
+
+        try {
           const result = await server.submitTransaction(tx);
+          const finalHash = result.hash || txHash;
 
-          logger.info({ requestId, jobId, batchIndex: i, transactionHash: result.hash, operations: recipientCount }, "Batch transaction submitted successfully (pre-signed mode)");
+          logger.info({ requestId, jobId, batchIndex: i, transactionHash: finalHash, operations: recipientCount }, "Batch transaction submitted successfully (pre-signed mode)");
 
           successCount += recipientCount;
           if (batchPayments.length > 0) {
@@ -152,7 +181,7 @@ export async function processJobInBackground(
                 amount: payment.amount,
                 asset: payment.asset,
                 status: "success",
-                transactionHash: result.hash,
+                transactionHash: finalHash,
               });
             }
           } else {
@@ -162,41 +191,84 @@ export async function processJobInBackground(
                 amount: "0",
                 asset: "XLM",
                 status: "success",
-                transactionHash: result.hash,
+                transactionHash: finalHash,
               });
             }
           }
         } catch (error) {
           logger.error({ requestId, jobId, batchIndex: i }, "Batch transaction failed (pre-signed mode)", error);
 
-          // A Stellar transaction fails atomically, so every operation it
-          // carries is a failed recipient — keep failCount aligned with the
-          // op count, mirroring the success path.
-          failCount += recipientCount;
-          if (batchPayments.length > 0) {
-            for (const payment of batchPayments) {
-              allResults.push({
-                recipient: payment.address,
-                amount: payment.amount,
-                asset: payment.asset,
-                status: "failed",
-                error: error instanceof Error ? error.message : "Unknown error",
-              });
+          let reconciledStatus: "success" | "failed" | "unknown" = "failed";
+          if (isTransportError(error)) {
+            try {
+              const rec = await reconcileTransaction(server, txHash);
+              reconciledStatus = rec.status;
+            } catch {
+              reconciledStatus = "unknown";
+            }
+          }
+
+          if (reconciledStatus === "success") {
+            successCount += recipientCount;
+            if (batchPayments.length > 0) {
+              for (const payment of batchPayments) {
+                allResults.push({
+                  recipient: payment.address,
+                  amount: payment.amount,
+                  asset: payment.asset,
+                  status: "success",
+                  transactionHash: txHash,
+                });
+              }
+            } else {
+              for (let j = 0; j < recipientCount; j++) {
+                allResults.push({
+                  recipient: `tx-${i}-op-${j}`,
+                  amount: "0",
+                  asset: "XLM",
+                  status: "success",
+                  transactionHash: txHash,
+                });
+              }
             }
           } else {
-            for (let j = 0; j < recipientCount; j++) {
-              allResults.push({
-                recipient: `tx-${i}-op-${j}`,
-                amount: "0",
-                asset: "XLM",
-                status: "failed",
-                error: error instanceof Error ? error.message : "Unknown error",
-              });
+            if (reconciledStatus !== "unknown") {
+              failCount += recipientCount;
+            }
+            const errText =
+              reconciledStatus === "unknown"
+                ? `UNRECONCILED_SUBMISSION_ERROR: ${error instanceof Error ? error.message : "Unknown error"}`
+                : (isInsufficientFeeError(error)
+                  ? "INSUFFICIENT_FEE"
+                  : (error instanceof Error ? error.message : "Unknown error"));
+
+            if (batchPayments.length > 0) {
+              for (const payment of batchPayments) {
+                allResults.push({
+                  recipient: payment.address,
+                  amount: payment.amount,
+                  asset: payment.asset,
+                  status: "failed",
+                  transactionHash: txHash,
+                  error: errText,
+                });
+              }
+            } else {
+              for (let j = 0; j < recipientCount; j++) {
+                allResults.push({
+                  recipient: `tx-${i}-op-${j}`,
+                  amount: "0",
+                  asset: "XLM",
+                  status: "failed",
+                  transactionHash: txHash,
+                  error: errText,
+                });
+              }
             }
           }
         }
 
-        incrementCompletedBatches(jobId);
+        await incrementCompletedBatches(jobId);
       }
 
       const finalStatus = successCount > 0 ? "completed" : "failed";
@@ -217,7 +289,7 @@ export async function processJobInBackground(
         },
       };
 
-      updateJob(jobId, {
+      await updateJob(jobId, {
         status: finalStatus,
         result: finalResult,
       });
@@ -250,7 +322,7 @@ export async function processJobInBackground(
     // Compute batches up-front so we know totalBatches immediately
     const batches = await createBatches(payments, MAX_OPS, { network, server });
 
-    updateJob(jobId, {
+    await updateJob(jobId, {
       status: "processing",
       totalBatches: batches.length,
       completedBatches: 0,
@@ -304,7 +376,7 @@ export async function processJobInBackground(
       }
 
       // Update progress after each batch completes
-      incrementCompletedBatches(jobId);
+      await incrementCompletedBatches(jobId);
     }
 
     const totalAmount = formatStellarAmount(sumStellarAmounts(payments.map(p => p.amount)));
@@ -325,7 +397,7 @@ export async function processJobInBackground(
     };
 
     const finalStatus = successCount > 0 ? "completed" : "failed";
-    updateJob(jobId, {
+    await updateJob(jobId, {
       status: finalStatus,
       result: finalResult,
     });
@@ -349,7 +421,7 @@ export async function processJobInBackground(
     }
   } catch (error) {
     logger.error({ requestId, jobId }, "Background worker encountered error", error);
-    updateJob(jobId, {
+    await updateJob(jobId, {
       status: "failed",
       error: error instanceof Error ? error.message : "Unknown worker error",
     });

@@ -73,7 +73,7 @@ export interface PaymentResult {
   recipient: string;
   amount: string;
   asset: string;
-  status: "success" | "failed";
+  status: "success" | "failed" | "unknown";
   transactionHash?: string;
   error?: string;
   rowIndex?: number; // #397: original row index, persisted for retry matching
@@ -149,6 +149,8 @@ export interface HorizonBalance {
   asset_type: "native" | "credit_alphanum4" | "credit_alphanum12";
   asset_code?: string;
   asset_issuer?: string;
+  buying_liabilities?: string;
+  selling_liabilities?: string;
 }
 
 export interface BalancesMap {

@@ -22,6 +22,8 @@ import {
   mapBatchStatusToDetailView,
   type BatchDetailView,
 } from "@/lib/dashboard/batch-detail";
+import { authenticatedFetch } from "@/lib/wallet-session-client";
+import { useWalletSessionContext } from "@/contexts/WalletSessionContext";
 
 interface JobStatusResponse {
   status: string;
@@ -49,7 +51,10 @@ function downloadFile(filename: string, contents: string, mime: string) {
 
 async function fetchBatchDetail(jobId: string, publicKey: string): Promise<BatchDetailView> {
   const params = new URLSearchParams({ publicKey });
-  const res = await fetch(`/api/batch-status/${jobId}?${params.toString()}`);
+  const res = await authenticatedFetch(
+    `/api/batch-status/${jobId}?${params.toString()}`,
+    publicKey,
+  );
   if (!res.ok) {
     throw new Error(`Failed to load batch (HTTP ${res.status})`);
   }
@@ -64,6 +69,7 @@ export default function BatchDetailPage({
 }) {
   const { jobId } = use(params);
   const { publicKey } = useWallet();
+  const { sessionToken } = useWalletSessionContext();
   const { pushBatchNotification } = useNotifications();
   const [retrying, setRetrying] = useState(false);
   const [retryJobId, setRetryJobId] = useState<string | null>(null);
@@ -86,7 +92,7 @@ export default function BatchDetailPage({
   const { data, error, isLoading } = useQuery({
     queryKey: ["job", jobId, publicKey],
     queryFn: () => fetchBatchDetail(jobId, publicKey!),
-    enabled: !!publicKey,
+    enabled: !!publicKey && !!sessionToken,
     staleTime: 5 * 1000,
     refetchInterval: (query) =>
       query.state.data?.status === "completed" || query.state.data?.status === "failed" ? false : 5000,
@@ -123,8 +129,9 @@ export default function BatchDetailPage({
 
       const poll = async () => {
         try {
-          const r = await fetch(
+          const r = await authenticatedFetch(
             `/api/batch-status/${newJobId}?publicKey=${encodeURIComponent(publicKey!)}`,
+            publicKey,
           );
           if (!r.ok) throw new Error(`Status fetch failed (${r.status})`);
           const jb = (await r.json()) as JobStatusResponse;
@@ -255,6 +262,59 @@ export default function BatchDetailPage({
           ) : null}
         </CardContent>
       </Card>
+
+
+      {data && data.summary && data.summary.failed > 0 && (
+        <Card className="border-red-950 bg-red-950/20 text-red-200 shadow-md">
+          <CardHeader className="flex flex-row items-center justify-between gap-4 pb-2">
+            <div>
+              <CardTitle className="text-base text-red-400">Failed Payments</CardTitle>
+              <p className="text-xs text-gray-400 mt-1">
+                Some payments failed. You can retry them using the server wallet, or rebuild and resign them using your own wallet.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleRetry}
+                disabled={retrying}
+              >
+                {retrying ? "Retrying…" : `Retry ${data.summary.failed} Failed`}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-red-500/30 text-red-300 hover:bg-red-500/20"
+                onClick={() => {
+                  const failed = data.recipients
+                    .filter(r => r.status === "failed")
+                    .map(r => ({
+                      address: r.address,
+                      amount: r.amount,
+                      asset: r.asset,
+                    }));
+                  sessionStorage.setItem("retry_failed_payments", JSON.stringify(failed));
+                  window.location.href = "/dashboard/new-batch";
+                }}
+              >
+                Rebuild & Resign
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="max-h-40 overflow-y-auto space-y-1 divide-y divide-red-900/20">
+            {data.recipients
+              .filter(r => r.status === "failed")
+              .map((r, idx) => (
+                <div key={idx} className="text-xs flex justify-between items-center gap-2 py-2">
+                  <span className="font-mono text-gray-400">{r.address}</span>
+                  <span className="text-red-400 font-mono font-semibold whitespace-nowrap ml-4">{r.amount} {r.asset}</span>
+                  <span className="text-red-300/80 italic text-right flex-1 truncate max-w-xs ml-4">{r.error || "Unknown error"}</span>
+                </div>
+              ))}
+          </CardContent>
+        </Card>
+      )}
 
       {data && (
         <Card className="border-[#1F2937] bg-[#121827] shadow-lg">

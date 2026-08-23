@@ -26,6 +26,20 @@ describe('buildBalancesMap', () => {
     expect(map[`USDC:${validIssuer}`]).toBe(500);
   });
 
+  test('subtracts selling liabilities from spendable issued-asset balances', () => {
+    const map = buildBalancesMap([
+      {
+        asset_type: 'credit_alphanum4',
+        asset_code: 'USDC',
+        asset_issuer: validIssuer,
+        balance: '100.0000000',
+        selling_liabilities: '90.0000000',
+      },
+    ]);
+
+    expect(map[`USDC:${validIssuer}`]).toBe(10);
+  });
+
   test('returns empty map for empty balances', () => {
     const map = buildBalancesMap([]);
     expect(Object.keys(map)).toHaveLength(0);
@@ -73,6 +87,27 @@ describe('validateBalances', () => {
     expect(result.checks[0].required).toBe(999);
   });
 
+  test('issued-asset selling liabilities prevent overstating available funds', () => {
+    const balancesWithLiabilities = buildBalancesMap([
+      {
+        asset_type: 'credit_alphanum4',
+        asset_code: 'USDC',
+        asset_issuer: validIssuer,
+        balance: '100.0000000',
+        selling_liabilities: '90.0000000',
+      },
+    ]);
+    const payments: PaymentInstruction[] = [
+      { address: validAddress, amount: '20', asset: `USDC:${validIssuer}` },
+    ];
+
+    const result = validateBalances(payments, balancesWithLiabilities);
+
+    expect(result.all_sufficient).toBe(false);
+    expect(result.checks[0].available).toBe(10);
+    expect(result.checks[0].required).toBe(20);
+  });
+
   test('missing trustline treated as zero balance', () => {
     const payments: PaymentInstruction[] = [
       { address: validAddress, amount: '1', asset: `BTC:${validIssuer}` },
@@ -112,5 +147,21 @@ describe('validateBalances', () => {
     ];
     const result = validateBalances(payments, balancesMap);
     expect(result.all_sufficient).toBe(true);
+  });
+
+  test('XLM reserve reflects subentries and sponsorship instead of a fixed 2 XLM floor', () => {
+    const payments: PaymentInstruction[] = [
+      { address: validAddress, amount: '6', asset: 'XLM' },
+    ];
+    const result = validateBalances(payments, { XLM: 10 }, 1, 100, {
+      baseReserveXlm: 0.5,
+      subentryCount: 8,
+      numSponsoring: 2,
+      numSponsored: 1,
+    });
+
+    expect(result.all_sufficient).toBe(false);
+    expect(result.checks[0].xlm_reserved).toBeCloseTo(5.50001);
+    expect(result.checks[0].xlm_available_after_reserve).toBeCloseTo(4.49999);
   });
 });

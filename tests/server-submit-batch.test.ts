@@ -14,14 +14,20 @@ process.env.JOB_STORE_PATH = path.join(process.cwd(), 'data', 'test-server-submi
 const mockSubmitTransaction = vi.fn();
 const mockLoadAccount = vi.fn();
 const mockFetchBaseFee = vi.fn().mockResolvedValue(100);
+const mockGetTransaction = vi.fn();
 
 vi.mock('stellar-sdk', async (importOriginal) => {
   const actual = await importOriginal<typeof import('stellar-sdk')>();
 
   class MockTransactionBuilder {
     operations: unknown[] = [];
+    fee: string = '100';
 
-    constructor(_sourceAccount: unknown, _options: unknown) {}
+    constructor(_sourceAccount: unknown, options: any) {
+      if (options && options.fee) {
+        this.fee = options.fee;
+      }
+    }
 
     addMemo(_memo: unknown) {
       return this;
@@ -43,7 +49,9 @@ vi.mock('stellar-sdk', async (importOriginal) => {
       return {
         operations: this.operations,
         sign: vi.fn(),
+        hash: () => Buffer.from('mock-transaction-hash'),
         toEnvelope: () => envelope,
+        fee: this.fee,
       };
     }
   }
@@ -55,6 +63,9 @@ vi.mock('stellar-sdk', async (importOriginal) => {
     feeStats = vi.fn().mockResolvedValue({
       fee_charged: { p90: '100' },
     });
+    transactions = vi.fn(() => ({
+      transaction: vi.fn(() => ({ call: mockGetTransaction })),
+    }));
   }
 
   return {
@@ -97,6 +108,7 @@ describe('StellarService.submitBatch — asset parsing (#319)', () => {
     mockLoadAccount.mockClear();
     mockSubmitTransaction.mockClear();
     mockFetchBaseFee.mockClear();
+    mockGetTransaction.mockReset();
     mockLoadAccount.mockResolvedValue(new Account(SOURCE_KEYPAIR.publicKey(), '1'));
 
     mockSubmitTransaction.mockResolvedValue({ hash: 'mock-tx-hash-abc123' });
@@ -384,5 +396,179 @@ describe('StellarService.submitBatch — tx_bad_seq retry with rebuild (#seq-ret
       expect(row.status).toBe('success');
       expect(row.transactionHash).toBe('mock-tx-hash-retried');
     }
+  });
+});
+
+describe('StellarService.submitSingleBatch — tx_bad_seq retry (worker path) (#747)', () => {
+  beforeEach(() => {
+    mockLoadAccount.mockClear();
+    mockSubmitTransaction.mockClear();
+    mockFetchBaseFee.mockClear();
+    mockGetTransaction.mockReset();
+  });
+
+  test('submitSingleBatch reloads account and retries on tx_bad_seq then succeeds', async () => {
+    const firstSourceAccount = new Account(SOURCE_KEYPAIR.publicKey(), '1');
+    const refreshedSourceAccount = new Account(SOURCE_KEYPAIR.publicKey(), '2');
+
+    mockLoadAccount
+      .mockResolvedValueOnce(firstSourceAccount)
+      .mockResolvedValueOnce(refreshedSourceAccount);
+
+    const txBadSeqError = {
+      response: {
+        data: {
+          extras: {
+            result_codes: {
+              transaction: 'tx_bad_seq',
+            },
+          },
+        },
+      },
+      message: 'tx_bad_seq',
+    };
+
+    mockSubmitTransaction
+      .mockRejectedValueOnce(txBadSeqError)
+      .mockResolvedValueOnce({ hash: 'single-batch-tx-retried' });
+
+    const { StellarService } = await import('../lib/stellar/server');
+    const service = new StellarService({
+      secretKey: SOURCE_KEYPAIR.secret(),
+      network: 'testnet',
+      maxOperationsPerTransaction: 100,
+    });
+
+    const result = await service.submitSingleBatch([
+      { address: RECIPIENT_1, amount: '10.0000000', asset: 'XLM' },
+      { address: RECIPIENT_2, amount: '20.0000000', asset: 'XLM' },
+    ]);
+
+    expect(mockSubmitTransaction).toHaveBeenCalledTimes(2);
+    expect(mockLoadAccount).toHaveBeenCalledTimes(2);
+    expect(result.summary.successful).toBe(2);
+    expect(result.summary.failed).toBe(0);
+    expect(result.totalTransactions).toBe(1);
+    for (const row of result.results) {
+      expect(row.status).toBe('success');
+      expect(row.transactionHash).toBe('single-batch-tx-retried');
+    }
+  });
+
+  test('submitSingleBatch bounds retries and marks failed on exhausted attempts', async () => {
+    const sourceAccount = new Account(SOURCE_KEYPAIR.publicKey(), '1');
+    mockLoadAccount.mockResolvedValue(sourceAccount);
+
+    const txBadSeqError = {
+      response: {
+        data: {
+          extras: {
+            result_codes: {
+              transaction: 'tx_bad_seq',
+            },
+          },
+        },
+      },
+      message: 'tx_bad_seq: bad sequence number',
+    };
+
+    // Fails on all attempts
+    mockSubmitTransaction.mockRejectedValue(txBadSeqError);
+
+    const { StellarService } = await import('../lib/stellar/server');
+    const service = new StellarService({
+      secretKey: SOURCE_KEYPAIR.secret(),
+      network: 'testnet',
+      maxOperationsPerTransaction: 100,
+    });
+
+    const result = await service.submitSingleBatch([
+      { address: RECIPIENT_1, amount: '10.0000000', asset: 'XLM' },
+    ]);
+
+    // Initial attempt + 3 retries (BAD_SEQUENCE_RETRY_LIMIT = 3)
+    expect(mockSubmitTransaction).toHaveBeenCalledTimes(4);
+    expect(mockLoadAccount).toHaveBeenCalledTimes(4);
+    expect(result.summary.successful).toBe(0);
+    expect(result.summary.failed).toBe(1);
+    expect(result.totalTransactions).toBe(0);
+    expect(result.results[0].status).toBe('failed');
+    expect(result.results[0].error).toContain('tx_bad_seq');
+  });
+
+  test('does not retry when a transport failure reconciles as submitted', async () => {
+    mockLoadAccount.mockResolvedValue(new Account(SOURCE_KEYPAIR.publicKey(), '1'));
+    mockGetTransaction.mockResolvedValue({ hash: 'reconciled-tx-hash' });
+
+    const ambiguousError = Object.assign(new Error('connection reset after submit'), {
+      code: 'ECONNRESET',
+      response: {
+        data: {
+          extras: {
+            result_codes: { transaction: 'tx_bad_seq' },
+          },
+        },
+      },
+    });
+    mockSubmitTransaction.mockRejectedValueOnce(ambiguousError);
+
+    const { StellarService } = await import('../lib/stellar/server');
+    const service = new StellarService({
+      secretKey: SOURCE_KEYPAIR.secret(),
+      network: 'testnet',
+      maxOperationsPerTransaction: 100,
+    });
+
+    const result = await service.submitSingleBatch([
+      { address: RECIPIENT_1, amount: '10.0000000', asset: 'XLM' },
+    ]);
+
+    expect(mockSubmitTransaction).toHaveBeenCalledTimes(1);
+    expect(mockLoadAccount).toHaveBeenCalledTimes(1);
+    expect(mockGetTransaction).toHaveBeenCalledTimes(1);
+    expect(result.totalTransactions).toBe(1);
+    expect(result.results[0].status).toBe('success');
+  });
+
+  test('submitSingleBatch retries with increased fee on tx_insufficient_fee and succeeds', async () => {
+    mockLoadAccount.mockResolvedValue(new Account(SOURCE_KEYPAIR.publicKey(), '1'));
+
+    const txInsufficientFeeError = {
+      response: {
+        data: {
+          extras: {
+            result_codes: {
+              transaction: 'tx_insufficient_fee',
+            },
+          },
+        },
+      },
+      message: 'tx_insufficient_fee',
+    };
+
+    mockSubmitTransaction
+      .mockRejectedValueOnce(txInsufficientFeeError)
+      .mockResolvedValueOnce({ hash: 'mock-tx-hash-fee-bumped' });
+
+    const { StellarService } = await import('../lib/stellar/server');
+    const service = new StellarService({
+      secretKey: SOURCE_KEYPAIR.secret(),
+      network: 'testnet',
+      maxOperationsPerTransaction: 100,
+    });
+
+    const result = await service.submitSingleBatch([
+      { address: RECIPIENT_1, amount: '10.0000000', asset: 'XLM' },
+    ]);
+
+    expect(mockSubmitTransaction).toHaveBeenCalledTimes(2);
+    expect(result.summary.successful).toBe(1);
+    expect(result.results[0].status).toBe('success');
+    expect(result.results[0].transactionHash).toBe('mock-tx-hash-fee-bumped');
+
+    const firstCallTx = mockSubmitTransaction.mock.calls[0][0];
+    const secondCallTx = mockSubmitTransaction.mock.calls[1][0];
+    expect(firstCallTx.fee).toBe('100');
+    expect(secondCallTx.fee).toBe('200');
   });
 });

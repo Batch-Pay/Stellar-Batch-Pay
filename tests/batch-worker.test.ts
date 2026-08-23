@@ -327,4 +327,41 @@ describe("processJobInBackground — concurrent processing guards (#508)", () =>
 
     expect(mockSubmitTransaction).toHaveBeenCalledOnce();
   });
+
+  test("marks a pre-signed job failed with INSUFFICIENT_FEE when Horizon rejects it due to low fees", async () => {
+    const txInsufficientFeeError = {
+      response: {
+        data: {
+          extras: {
+            result_codes: {
+              transaction: "tx_insufficient_fee",
+            },
+          },
+        },
+      },
+      message: "tx_insufficient_fee",
+    };
+
+    mockSubmitTransaction.mockRejectedValue(txInsufficientFeeError);
+
+    const { createJob, getJob } = await import("../lib/job-store");
+    const { processJobInBackground } = await import("../lib/stellar/batch-worker");
+
+    const owner = Keypair.random().publicKey();
+    const recipient = Keypair.random().publicKey();
+    const signedTransactions = ["AAAA"];
+    const payments = [{ address: recipient, amount: "1", asset: "XLM" }];
+
+    const jobId = await createJob(payments, "testnet", owner, signedTransactions);
+
+    await processJobInBackground(jobId, payments, "testnet");
+
+    const job = await getJob(jobId);
+
+    expect(job?.status).toBe("failed");
+    expect(job?.result?.summary.failed).toBe(1);
+    expect(job?.result?.summary.successful).toBe(0);
+    expect(job?.result?.results[0].status).toBe("failed");
+    expect(job?.result?.results[0].error).toBe("INSUFFICIENT_FEE");
+  });
 });

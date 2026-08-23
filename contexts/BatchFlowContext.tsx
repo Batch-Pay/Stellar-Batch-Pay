@@ -8,6 +8,7 @@ import { useNotifications } from "@/contexts/NotificationsContext";
 import { batchHistoryKeys, dashboardMetricsKeys } from "@/lib/query-keys";
 import { parsePaymentFile, analyzeParsedPayments } from "@/lib/stellar/parser";
 import { getBatchSummary } from "@/lib/stellar/summary";
+import { validatePaymentInstruction } from "@/lib/stellar/validator";
 import { canonicalizeIdempotencyPayload } from "@/lib/idempotency";
 import { authenticatedFetch } from "@/lib/wallet-session-client";
 import { useOptionalWalletSession } from "@/contexts/WalletSessionContext";
@@ -97,7 +98,7 @@ interface BatchFlowContextType {
   // Actions
   onSkipToggle: (index: number) => void;
   onConvertToggle: (index: number) => void;
-  handleRetryFailed: (failedPayments: UploadedPaymentInstruction[]) => void;
+  handleRetryFailed: (failedPayments: PaymentInstruction[]) => void;
   handleFileSelect: (selectedFile: File, format: "json" | "csv") => Promise<void>;
   handleManualContinue: () => void;
   loadBatchMeta: (payments: PaymentInstruction[]) => Promise<void>;
@@ -197,6 +198,7 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
       }
     }
   }, [handleRestore]);
+
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -345,8 +347,31 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const handleRetryFailed = useCallback((failedPayments: UploadedPaymentInstruction[]) => {
-    const rows = failedPayments.map((instruction, index) => ({
+  const handleRetryFailed = useCallback((failedPayments: PaymentInstruction[]) => {
+    const validPayments = failedPayments.filter((p) => {
+      try {
+        return validatePaymentInstruction(p).valid;
+      } catch {
+        return false;
+      }
+    });
+
+    const droppedCount = failedPayments.length - validPayments.length;
+    if (droppedCount > 0) {
+      toast.warning(`Dropped ${droppedCount} invalid payment instruction(s) from retry list.`);
+    }
+
+    if (validPayments.length === 0) {
+      toast.error("No valid payments found to retry.");
+      return;
+    }
+
+    const uploadedPayments: UploadedPaymentInstruction[] = validPayments.map((p, idx) => ({
+      ...p,
+      rowIndex: p.rowIndex ?? (idx + 1),
+    }));
+
+    const rows = uploadedPayments.map((instruction, index) => ({
       rowNumber: index + 1,
       instruction,
       valid: true,
@@ -354,10 +379,10 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
 
     setValidationResult({
       rows,
-      validPayments: failedPayments,
+      validPayments: uploadedPayments,
       invalidCount: 0,
     });
-    setSummary(getBatchSummary(failedPayments));
+    setSummary(getBatchSummary(uploadedPayments));
     setSkippedIndices([]);
     setConvertedIndices([]);
     setStep(2);
@@ -365,6 +390,22 @@ export function BatchFlowProvider({ children }: { children: React.ReactNode }) {
       "Loaded failed payments for retry. Review before resubmitting.",
     );
   }, []);
+
+  useEffect(() => {
+    const savedFailed = sessionStorage.getItem("retry_failed_payments");
+    if (savedFailed) {
+      try {
+        const parsed = JSON.parse(savedFailed);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          handleRetryFailed(parsed);
+        }
+      } catch (e) {
+        console.error("Failed to restore retry_failed_payments:", e);
+      } finally {
+        sessionStorage.removeItem("retry_failed_payments");
+      }
+    }
+  }, [handleRetryFailed]);
 
   const handleFileSelect = useCallback(async (
     selectedFile: File,

@@ -27,7 +27,7 @@ import {
   validateBatchConfig,
 } from "./validator";
 import { getRecommendedFee } from "./fee-service";
-import { isBadSequenceError } from "./submit-errors";
+import { isBadSequenceError, isInsufficientFeeError } from "./submit-errors";
 import { computeTransactionHash, isTransportError, reconcileTransaction } from "./reconciliation";
 import { horizonUrl } from "./network-config";
 import Big from "big.js";
@@ -38,6 +38,15 @@ const BAD_SEQUENCE_RETRY_LIMIT = Math.max(
   1,
   Number.parseInt(process.env.STELLAR_BAD_SEQUENCE_RETRY_LIMIT ?? "3", 10) || 3,
 );
+
+const FEE_RETRY_LIMIT = Math.max(
+  1,
+  Number.parseInt(process.env.STELLAR_FEE_RETRY_LIMIT ?? "3", 10) || 3,
+);
+
+const FEE_MULTIPLIER = Number.parseFloat(process.env.STELLAR_FEE_MULTIPLIER ?? "2.0") || 2.0;
+
+const MAX_FEE = Number.parseInt(process.env.STELLAR_MAX_FEE ?? "1000000", 10) || 1000000;
 
 function submissionErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -114,6 +123,7 @@ export class StellarService {
     submitted: boolean;
     totalAmount: Big;
     needsReload: boolean;
+    error?: unknown;
   }> {
     const results: PaymentResult[] = [];
     // Indices into `results` of placeholders for operations actually added to
@@ -246,6 +256,7 @@ export class StellarService {
         totalAmount: totalAmountBig,
         needsReload:
           reconciledStatus !== "success" && isBadSequenceError(error),
+        error,
       };
     }
   }
@@ -267,25 +278,43 @@ export class StellarService {
       submitted: boolean;
       totalAmount: Big;
       needsReload: boolean;
+      error?: unknown;
     };
     sourceAccount: Account;
   }> {
     let sourceAccount = initialSourceAccount;
-    let retries = 0;
+    let badSeqRetries = 0;
+    let feeRetries = 0;
+    let currentFee = Number.isNaN(fee) || fee <= 0 ? 100 : fee;
     let outcome;
 
     while (true) {
       outcome = await this.submitOneTransaction(
         batchPayments,
         sourceAccount,
-        fee,
+        currentFee,
         txIndex,
       );
 
-      if (outcome.needsReload && retries < BAD_SEQUENCE_RETRY_LIMIT) {
-        retries++;
+      if (outcome.needsReload && badSeqRetries < BAD_SEQUENCE_RETRY_LIMIT) {
+        badSeqRetries++;
         sourceAccount = await this.server.loadAccount(this.keypair.publicKey());
         continue;
+      }
+
+      if (
+        !outcome.submitted &&
+        outcome.error &&
+        isInsufficientFeeError(outcome.error) &&
+        feeRetries < FEE_RETRY_LIMIT
+      ) {
+        const baseFeeVal = Number.isNaN(currentFee) ? 100 : currentFee;
+        const nextFee = Math.min(Math.ceil(baseFeeVal * FEE_MULTIPLIER), MAX_FEE);
+        if (nextFee > (Number.isNaN(currentFee) ? 0 : currentFee)) {
+          feeRetries++;
+          currentFee = nextFee;
+          continue;
+        }
       }
       break;
     }

@@ -23,6 +23,7 @@ import { computeTransactionHash, isTransportError, reconcileTransaction } from "
 import { horizonUrl } from "./network-config";
 import { logger } from "../logger";
 import { triggerWebhooksWithRetry } from "../webhooks";
+import { isInsufficientFeeError } from "./submit-errors";
 
 /**
  * Process a batch job in the background. This function must NOT be awaited
@@ -237,7 +238,9 @@ export async function processJobInBackground(
             const errText =
               reconciledStatus === "unknown"
                 ? `UNRECONCILED_SUBMISSION_ERROR: ${error instanceof Error ? error.message : "Unknown error"}`
-                : (error instanceof Error ? error.message : "Unknown error");
+                : (isInsufficientFeeError(error)
+                  ? "INSUFFICIENT_FEE"
+                  : (error instanceof Error ? error.message : "Unknown error"));
 
             if (batchPayments.length > 0) {
               for (const payment of batchPayments) {

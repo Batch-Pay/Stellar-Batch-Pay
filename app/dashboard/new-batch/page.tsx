@@ -551,7 +551,7 @@ function NewBatchPaymentPageContent() {
 
           {step === 4 && result && (
             <MotionSafe {...stepEnter} className="space-y-6">
-              <ResultsDisplay result={result} />
+              <ResultsDisplay result={result} onRetry={handleRetryFailed} />
               <div className="flex flex-wrap gap-3 pt-4">
                 {jobId && (
                   <Button

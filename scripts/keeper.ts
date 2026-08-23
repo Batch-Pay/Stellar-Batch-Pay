@@ -12,7 +12,7 @@ import {
   nativeToScVal,
 } from "stellar-sdk";
 import { prioritizeRecipients } from "../lib/keeper/threshold";
-import { createSecretsProvider } from "../lib/secrets/index";
+import { createSecretsProvider, assertEnvBackendAllowed, isProductionEnv } from "../lib/secrets/index";
 import {
   decodeTopicValue,
   parseVestingEventRecipient,
@@ -148,6 +148,14 @@ export function determineMaintenanceState(
 // ── Main loop ──────────────────────────────────────────────────────────────
 
 export async function main() {
+  // Refuse to start with the env backend in production (#734).
+  // This mirrors the guard inside createSecretsProvider but fires at the very
+  // top of the keeper's startup so the error surfaces in logs immediately,
+  // before any network activity or secret fetching begins.
+  if (isProductionEnv() && (process.env.SECRET_BACKEND ?? 'env') === 'env') {
+    assertEnvBackendAllowed();
+  }
+
   // Fetch the keeper secret from the configured backend (#257).
   // Set SECRET_BACKEND=aws|github|env (default: env with a warning).
   const secrets = await createSecretsProvider();

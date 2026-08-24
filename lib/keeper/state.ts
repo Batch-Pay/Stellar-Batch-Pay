@@ -1,5 +1,6 @@
 export interface KeeperState {
   nextMaintenanceIndex: Record<string, number>;
+  lastRunAt?: string;
 }
 
 export type WindowOutcome = "success" | "no_work" | "not_confirmed";
@@ -14,6 +15,8 @@ export function parseKeeperState(raw: unknown): KeeperState {
   }
   const nextMaintenanceIndex = (raw as { nextMaintenanceIndex?: unknown })
     .nextMaintenanceIndex;
+  const lastRunAt = (raw as { lastRunAt?: unknown }).lastRunAt;
+
   if (
     !nextMaintenanceIndex ||
     typeof nextMaintenanceIndex !== "object" ||
@@ -28,7 +31,10 @@ export function parseKeeperState(raw: unknown): KeeperState {
       parsed[recipient] = index;
     }
   }
-  return { nextMaintenanceIndex: parsed };
+  return {
+    nextMaintenanceIndex: parsed,
+    lastRunAt: typeof lastRunAt === "string" ? lastRunAt : undefined,
+  };
 }
 
 /**

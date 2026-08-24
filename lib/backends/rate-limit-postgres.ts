@@ -149,7 +149,7 @@ export async function checkPostgresRateLimitHealth(): Promise<{ ok: boolean; err
   try {
     await ensureSchema();
     const pool = getPool();
-    await pool.query("SELECT 1");
+    await pool.query("SELECT key FROM rate_buckets LIMIT 1");
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

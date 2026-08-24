@@ -48,6 +48,7 @@ const DEFAULT_LIMITS: Record<EndpointKey, EndpointLimit> = {
   // across a wallet's full job history, so it is limited like the other
   // aggregation endpoint (dashboard-metrics) rather than a cheap status poll.
   "batch-history": { free: 20, pro: 60, enterprise: 180, windowMs: 60_000 },
+  "webhook-deliveries": { free: 30, pro: 100, enterprise: 300, windowMs: 60_000 },
   health: { free: 30, pro: 100, enterprise: 300, windowMs: 60_000 },
 };
 
@@ -66,6 +67,10 @@ const endpointLimits: Record<EndpointKey, EndpointLimit> = {
   "batch-retry": tunedLimit("batch-retry", DEFAULT_LIMITS["batch-retry"]),
   "batch-recover": tunedLimit("batch-recover", DEFAULT_LIMITS["batch-recover"]),
   "batch-history": tunedLimit("batch-history", DEFAULT_LIMITS["batch-history"]),
+  "webhook-deliveries": tunedLimit(
+    "webhook-deliveries",
+    DEFAULT_LIMITS["webhook-deliveries"],
+  ),
   health: tunedLimit("health", DEFAULT_LIMITS.health),
 };
 

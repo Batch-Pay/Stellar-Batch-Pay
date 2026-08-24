@@ -60,6 +60,7 @@ function readU32Env(name: string, fallback: number): number {
 
 interface KeeperState {
   nextMaintenanceIndex: Record<string, number>;
+  lastRunAt?: string;
 }
 
 async function loadState(): Promise<KeeperState> {
@@ -202,6 +203,7 @@ export async function main() {
       await server.getAccount(keeperKeypair.publicKey());
     }
 
+    state.lastRunAt = new Date().toISOString();
     await saveState(state);
 
     // 2. Maintain contract instance

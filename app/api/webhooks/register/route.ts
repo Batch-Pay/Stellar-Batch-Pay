@@ -7,28 +7,7 @@ import {
 } from "@/lib/webhooks";
 import { safeJsonResponse } from "@/lib/safe-json";
 import { applyRateLimit, setRateLimitHeaders } from "@/lib/api-rate-limit";
-
-/**
- * Require an API key on every webhook CRUD operation (Issue #336).
- *
- * Accepts `Authorization: Bearer <key>` or `X-API-Key: <key>`.
- * Returns a 401 response when no key is present.
- */
-function requireApiKey(request: NextRequest): Response | null {
-  const bearer = request.headers.get("authorization");
-  const apiKey = request.headers.get("x-api-key");
-  const hasKey =
-    (bearer && bearer.startsWith("Bearer ") && bearer.slice(7).trim().length > 0) ||
-    (apiKey && apiKey.trim().length > 0);
-
-  if (!hasKey) {
-    return safeJsonResponse(
-      { error: "Unauthorized. An API key is required for webhook management." },
-      { status: 401 },
-    );
-  }
-  return null;
-}
+import { requireWebhookAdminApiKey } from "@/lib/webhook-admin-auth";
 
 /**
  * GET /api/webhooks/register
@@ -37,7 +16,7 @@ function requireApiKey(request: NextRequest): Response | null {
  * Requires an API key so anonymous callers cannot enumerate registrations.
  */
 export async function GET(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = requireWebhookAdminApiKey(request);
   if (authError) return authError;
 
   return safeJsonResponse({ webhooks: getWebhooksRedacted() });
@@ -55,7 +34,7 @@ export async function GET(request: NextRequest) {
  * Returns the full secret only on initial creation — it is never returned again.
  */
 export async function POST(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = requireWebhookAdminApiKey(request);
   if (authError) return authError;
 
   const rate = await applyRateLimit(request, "webhook-register");
@@ -101,7 +80,7 @@ export async function POST(request: NextRequest) {
  * Requires an API key.
  */
 export async function DELETE(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = requireWebhookAdminApiKey(request);
   if (authError) return authError;
 
   const rate = await applyRateLimit(request, "webhook-register");

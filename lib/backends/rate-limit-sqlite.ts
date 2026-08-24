@@ -171,7 +171,7 @@ export function consumeRateLimit(args: {
 export function checkSqliteRateLimitHealth(): { ok: boolean; error?: string } {
   try {
     const db = getDb();
-    db.prepare("SELECT 1").get();
+    db.prepare("SELECT key FROM rate_buckets LIMIT 1").get();
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

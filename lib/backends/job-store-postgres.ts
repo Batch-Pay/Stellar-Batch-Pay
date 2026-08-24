@@ -573,7 +573,7 @@ export async function checkPostgresJobStoreHealth(): Promise<{ ok: boolean; erro
   try {
     await ensureSchema();
     const pool = getPool();
-    await pool.query("SELECT 1");
+    await pool.query("SELECT jobId FROM jobs LIMIT 1");
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

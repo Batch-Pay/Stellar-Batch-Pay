@@ -30,7 +30,7 @@ jobs:
         run: npm run build
 
       - name: Install Playwright browsers
-        run: bunx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Start production server
         run: npm run start &
@@ -51,7 +51,7 @@ jobs:
           echo "Server is ready."
 
       - name: Run Playwright tests
-        run: bunx playwright test
+        run: npm run test:e2e
         env:
           CI: 'true'
           E2E_BASE_URL: http://localhost:3000

@@ -4,9 +4,8 @@ This guide covers the local setup, architecture, testing workflow, and pull requ
 
 ## Prerequisites
 
-- Node.js 20 or newer
-- npm 10 or newer
-- Bun 1.2.4
+- Node.js 22 or newer (see `engines.node` in `package.json`)
+- npm 10 or newer (this repository's `packageManager` is npm)
 - Rust toolchain with `wasm32-unknown-unknown`
 - Soroban CLI
 
@@ -74,6 +73,13 @@ npm test
 npm run typecheck
 ```
 
+Run Playwright end-to-end tests (installs Chromium browsers on first run):
+
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
+
 Run the production build:
 
 ```bash
@@ -94,6 +100,9 @@ cargo build --manifest-path contracts/Cargo.toml --target wasm32-unknown-unknown
 
 Before opening a pull request, make sure the relevant local checks complete successfully.
 The primary CI workflow now runs both Vitest and TypeScript typechecking, so `npm test` and `npm run typecheck` should both pass locally before you push.
+
+Required GitHub status checks and the maintainer branch-protection checklist
+are documented in [docs/ci-merge-gating.md](docs/ci-merge-gating.md).
 
 ## Pull Request Guidelines
 
@@ -122,7 +131,7 @@ When an audit failure or security advisory lands:
    dep). High/critical runtime advisories are blockers.
 2. Bump the offending package or pin a patched version in `package.json` or
    `contracts/Cargo.toml`, then update the lockfile.
-3. Run `bun install` then `npm test` and `bun run build` locally. For Cargo
+3. Run `npm install` then `npm test` and `npm run build` locally. For Cargo
    bumps, also run `cargo test --manifest-path contracts/Cargo.toml` to catch
    soroban-sdk breakage.
 4. Review dependency bumps for `stellar`, `next`, `better-sqlite3`, and `react`

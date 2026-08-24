@@ -1,14 +1,22 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from "@playwright/test";
+import { WALLET_EMPTY_DESCRIPTION, WALLET_EMPTY_TITLE } from "./copy";
 
-test.describe('Insufficient Balance', () => {
-  test('should show error when balance is insufficient', async ({ page }) => {
-    await page.goto('/dashboard/new-batch');
-    
-    // Similar mock setup
-    // We'll skip implementation for now
-    // The test would mock Horizon responses to return low balances
-    // and check that validation errors appear.
-    
-    expect(true).toBe(true);
+test.describe("Insufficient Balance", () => {
+  test("new-batch empty state points users to connect a wallet", async ({
+    page,
+  }) => {
+    const response = await page.goto("/dashboard/new-batch");
+    expect(response).not.toBeNull();
+    expect(response!.status()).toBeLessThan(500);
+
+    await expect(
+      page.getByText(WALLET_EMPTY_TITLE),
+    ).toBeVisible();
+    await expect(
+      page.getByText(WALLET_EMPTY_DESCRIPTION),
+    ).toBeVisible();
+    await expect(
+      page.locator("#main-content").getByRole("link", { name: /^settings$/i }),
+    ).toBeVisible();
   });
 });

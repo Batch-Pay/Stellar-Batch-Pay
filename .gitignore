@@ -46,6 +46,12 @@ contract_id*.txt
 /data/
 data/*.db
 
+# playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 # Rust contract test outputs
 contracts/batch-vesting/cargo_test_err.txt
 contracts/batch-vesting/test_output.txt

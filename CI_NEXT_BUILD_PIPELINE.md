@@ -12,11 +12,11 @@ Before this change, CI only ran the Vitest unit suite and a `tsc --noEmit` typec
 
 ### CI runs `next build` on pull requests targeting `main`
 
-The workflow triggers on `pull_request: branches: [main]`. The `build` job calls `bun run build`, which maps to `next build` in `package.json`. Any build error causes the job to exit non-zero, failing the check.
+The workflow triggers on `pull_request: branches: [main]`. The `build` job calls `npm run build`, which maps to `next build` in `package.json`. Any build error causes the job to exit non-zero, failing the check.
 
 ### Build job uses frozen lockfile install consistent with the vitest job
 
-Both jobs install dependencies with `bun install --frozen-lockfile`. This guarantees the exact same resolved dependency tree in both jobs and prevents silent lockfile drift during CI.
+Both jobs install dependencies with `npm ci`. This guarantees the exact same resolved dependency tree in both jobs and prevents silent lockfile drift during CI.
 
 ### Documented env stubs allow build without production secrets
 
@@ -33,26 +33,22 @@ Network endpoint variables (`HORIZON_URL_TESTNET`, `SOROBAN_RPC_URL_TESTNET`, et
 
 ### Failed builds block merge via required GitHub check
 
-GitHub Actions does not enforce merge blocking automatically. To satisfy this criterion the repository owner must configure a required status check in branch protection:
-
-1. Go to **Repository Settings → Branches → Branch protection rules → Edit rule for `main`**.
-2. Enable **"Require status checks to pass before merging"**.
-3. In the search box, find and select the **`build`** check. This name matches the job key defined in `ci.yml`.
-4. Save the rule.
-
-After this is done, any PR whose `build` job fails will be blocked from merging until the build passes.
+GitHub Actions does not enforce merge blocking automatically. A repository
+admin must require status checks on `main`. `build` is one of those checks;
+the full set (`vitest`, `build`, `e2e`, and the security-audit jobs) and the
+maintainer UI checklist live in [docs/ci-merge-gating.md](docs/ci-merge-gating.md).
 
 ## Cache Strategy
 
-The job caches `.next/cache` using `actions/cache@v4` with a key based on the hash of `bun.lock`:
+The job caches `.next/cache` using `actions/cache@v4` with a key based on the hash of `package-lock.json`:
 
 ```
-key: ${{ runner.os }}-nextjs-${{ hashFiles('**/bun.lock') }}
+key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}
 restore-keys: |
   ${{ runner.os }}-nextjs-
 ```
 
-This file is named `bun.lock` (not `bun.lockb`) because the project uses Bun 1.2+, which generates the text-based lockfile format by default. A cache hit restores intermediate SWC and TypeScript compilation artefacts so subsequent builds only recompile modules that changed, reducing build time from a full O(M) compilation to an incremental O(ΔM) pass over changed modules.
+A cache hit restores intermediate SWC and TypeScript compilation artefacts so subsequent builds only recompile modules that changed, reducing build time from a full O(M) compilation to an incremental O(ΔM) pass over changed modules.
 
 ## Files Changed
 

@@ -50,16 +50,19 @@ jobs:
           KEEPER_SECRET: ${{ secrets.KEEPER_SECRET }}
 
       # Restore the per-recipient pagination cursor from the previous run.
-      # The artifact is keyed on the workflow + contract so different
-      # environments (testnet vs mainnet) never share state.
-      # A cache-miss (first run, or after retention expires) is fine — the
-      # keeper initialises an empty state object and starts from index 0.
+      # actions/cache@v4 persists the entry across runs (unlike artifacts,
+      # which are scoped to a single run and cannot be read by a later one).
+      # The primary key embeds the run ID so each run writes a new entry;
+      # restore-keys falls back to the most-recent matching prefix so the
+      # previous cursor is always loaded.  A cache miss on the very first
+      # run is fine — the keeper starts from index 0 and creates the file.
       - name: Restore keeper state
-        uses: actions/download-artifact@v4
+        uses: actions/cache@v4
         with:
-          name: keeper-state-${{ secrets.CONTRACT_ID }}
-          path: ./data
-        continue-on-error: true
+          path: ./data/keeper-state.json
+          key: keeper-state-${{ secrets.CONTRACT_ID }}-${{ github.run_id }}
+          restore-keys: |
+            keeper-state-${{ secrets.CONTRACT_ID }}-
 
       - name: Run keeper bot
         env:
@@ -73,20 +76,6 @@ jobs:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           LOW_BALANCE_THRESHOLD: ${{ vars.LOW_BALANCE_THRESHOLD || '50' }}
         run: npx tsx scripts/keeper.ts
-
-      # Upload the updated state so the next scheduled run can resume
-      # pagination from where this run left off.  The artifact is uploaded
-      # even when the keeper step fails (if: always()) so a transient RPC
-      # error mid-run does not lose the cursor progress that was saved.
-      - name: Upload keeper state
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: keeper-state-${{ secrets.CONTRACT_ID }}
-          path: ./data/keeper-state.json
-          # Retain for 90 days — well beyond the 6-hour cron cadence.
-          retention-days: 90
-          if-no-files-found: ignore
 
       - name: Report failure
         if: failure()

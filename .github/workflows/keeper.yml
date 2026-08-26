@@ -25,8 +25,44 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      # Install all dependencies (including devDependencies) so that tsx,
+      # which is a devDependency, is available to execute the keeper script.
+      # --only=production was the original bug: it skips devDeps, making
+      # the npx tsx call fail with "command not found".
       - name: Install dependencies
-        run: npm ci --only=production
+        run: npm ci
+
+      # Fail loudly before doing any work if the secrets the keeper needs
+      # are not configured.  An empty CONTRACT_ID means the bot would silently
+      # target no contract; an empty KEEPER_SECRET means it cannot sign txs.
+      - name: Validate required secrets
+        run: |
+          missing=()
+          [[ -z "$CONTRACT_ID"    ]] && missing+=("CONTRACT_ID")
+          [[ -z "$KEEPER_SECRET"  ]] && missing+=("KEEPER_SECRET")
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "ERROR: required secret(s) not set: ${missing[*]}" >&2
+            echo "Set them under Settings → Secrets and variables → Actions." >&2
+            exit 1
+          fi
+        env:
+          CONTRACT_ID: ${{ secrets.CONTRACT_ID }}
+          KEEPER_SECRET: ${{ secrets.KEEPER_SECRET }}
+
+      # Restore the per-recipient pagination cursor from the previous run.
+      # actions/cache@v4 persists the entry across runs (unlike artifacts,
+      # which are scoped to a single run and cannot be read by a later one).
+      # The primary key embeds the run ID so each run writes a new entry;
+      # restore-keys falls back to the most-recent matching prefix so the
+      # previous cursor is always loaded.  A cache miss on the very first
+      # run is fine — the keeper starts from index 0 and creates the file.
+      - name: Restore keeper state
+        uses: actions/cache@v4
+        with:
+          path: ./data/keeper-state.json
+          key: keeper-state-${{ secrets.CONTRACT_ID }}-${{ github.run_id }}
+          restore-keys: |
+            keeper-state-${{ secrets.CONTRACT_ID }}-
 
       - name: Run keeper bot
         env:
@@ -35,11 +71,11 @@ jobs:
           SOROBAN_RPC_URL: ${{ secrets.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org' }}
           NETWORK_PASSPHRASE: ${{ secrets.NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015' }}
           CONTRACT_ID: ${{ secrets.CONTRACT_ID }}
-          MAINTENANCE_START_INDEX: ${{ vars.MAINTENANCE_START_INDEX || '0' }}
           MAINTENANCE_LIMIT: ${{ vars.MAINTENANCE_LIMIT || '10' }}
+          KEEPER_STATE_PATH: ./data/keeper-state.json
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           LOW_BALANCE_THRESHOLD: ${{ vars.LOW_BALANCE_THRESHOLD || '50' }}
-        run: npx ts-node scripts/keeper.ts
+        run: npx tsx scripts/keeper.ts
 
       - name: Report failure
         if: failure()

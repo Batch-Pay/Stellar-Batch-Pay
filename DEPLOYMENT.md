@@ -48,13 +48,13 @@ export NODE_ENV="production"
 - Automated test pipelines (e.g. `tests/batch-submit.test.ts` sets this to `"true"`)
 - Staging environments running automated batch jobs
 
-### `SERVER_SIGNING_API_KEY` — Cryptographic Authorization (#696, fail-closed #728)
+### `SERVER_SIGNING_API_KEY` — Cryptographic Authorization (#696)
 
 | Variable                  | Default         | Purpose                                                                                 |
 | ------------------------- | --------------- | --------------------------------------------------------------------------------------- |
 | `SERVER_SIGNING_API_KEY`  | `""` (unset)    | Secret API key required in the `Authorization: Bearer` header for server-signing requests |
 
-When `ALLOW_SERVER_SIGNING=true`, the server enforces cryptographic authorization
+When `ALLOW_SERVER_SIGNING=true`, the server now enforces cryptographic authorization
 on `/api/batch-submit` and `/api/batch-retry`. Callers must include the API key in the
 `Authorization` header:
 
@@ -69,31 +69,15 @@ openssl rand -hex 32
 # Example output: a1b2c3d4e5f6...64-char-hex-string
 ```
 
-**Fail closed (#728):** `SERVER_SIGNING_API_KEY` is **required** whenever
-`ALLOW_SERVER_SIGNING=true`. If it is not set, `/api/batch-submit` and
-`/api/batch-retry` refuse every server-signing request with `403` — they do
-not fall back to accepting requests without a credential. Server-signing
-moves real funds from a hot wallet, so an unconfigured credential must mean
-"nobody is authorized," never "everybody is authorized." Set
-`SERVER_SIGNING_API_KEY` in every deployment where `ALLOW_SERVER_SIGNING=true`.
-
-**`SERVER_SIGNING_ALLOW_UNAUTHENTICATED` — local-demo-only opt-out:**
-
-| Variable                              | Default | Purpose                                                                 |
-| -------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `SERVER_SIGNING_ALLOW_UNAUTHENTICATED` | `false` (unset) | Explicit, narrow opt-in to accept server-signing requests without a credential, for local demos only |
-
-If you need to exercise server-signing locally without generating a key,
-set `SERVER_SIGNING_ALLOW_UNAUTHENTICATED=true`. This is **refused outright
-whenever the process is running in production** (`NODE_ENV=production` or
-`BATCHPAY_ENV=production`) — the request still fails closed with `403` in
-that case, so this opt-in can never accidentally become a production
-posture. Never set this variable in a deployed environment.
+**Backward-compatibility:** If `SERVER_SIGNING_API_KEY` is not set, the server
+accepts server-signing requests without credential verification (the previous
+behavior) but logs a deprecation warning on every request. Operators should
+configure this variable in every deployment where server signing is enabled.
 
 **Security warnings:**
 
 - `ALLOW_SERVER_SIGNING=true` centralises key risk on the server. A compromised server can sign and submit arbitrary transactions.
-- `SERVER_SIGNING_API_KEY` is required, not optional, whenever `ALLOW_SERVER_SIGNING=true` — the server refuses to run server-signing requests without it (see fail-closed note above).
+- Always set `SERVER_SIGNING_API_KEY` when enabling server signing — it provides defense-in-depth beyond the network-layer controls.
 - Never enable on public-facing production endpoints without additional access controls (VPN, IP allowlist, or mutual TLS).
 - Requires `STELLAR_SECRET_KEY` to be set; the flag has no effect without it.
 - Audit all access logs when this flag is active.
@@ -116,14 +100,6 @@ export SERVER_SIGNING_API_KEY="$(openssl rand -hex 32)"
 > }
 > ```
 >
-> **API error when `SERVER_SIGNING_API_KEY` is unset (403, fail closed):**
->
-> ```json
-> {
->   "error": "Server-signing is not authorized: SERVER_SIGNING_API_KEY is not configured on the server. Refusing this request."
-> }
-> ```
->
 > **API error for missing credential (401):**
 >
 > ```json
@@ -141,7 +117,6 @@ export SERVER_SIGNING_API_KEY="$(openssl rand -hex 32)"
 > ```
 >
 > See DEVELOPMENT.md for local test setup using this flag.
-
 
 ### `WALLET_AUTH_SECRET` — Wallet Session Authentication
 

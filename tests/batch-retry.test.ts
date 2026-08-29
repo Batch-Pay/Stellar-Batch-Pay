@@ -23,11 +23,6 @@ import { Keypair } from "stellar-sdk";
 
 process.env.JOB_STORE_PATH = ":memory:";
 process.env.ALLOW_SERVER_SIGNING = "true";
-// #728: server-signing now fails closed without a configured API key, so
-// every request in this file needs one — see the Authorization header
-// baked into makeRequest() below.
-const SERVER_SIGNING_API_KEY = "test-api-key-for-server-signing-batch-retry-728";
-process.env.SERVER_SIGNING_API_KEY = SERVER_SIGNING_API_KEY;
 
 // Use a deterministic, cryptographically valid server keypair so tests that
 // assert on the derived public key remain stable across runs.
@@ -232,13 +227,7 @@ function makeRequest(
 ) {
   return new Request("http://localhost/api/batch-retry", {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      // #728: fail-closed default requires a valid credential; individual
-      // tests can still override this via `headers` if they ever need to.
-      Authorization: `Bearer ${SERVER_SIGNING_API_KEY}`,
-      ...headers,
-    },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }

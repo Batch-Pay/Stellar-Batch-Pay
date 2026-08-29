@@ -122,7 +122,7 @@ If you need special handling for a specific asset:
 
 > **Important — server-side signing:** `StellarService` in `server.ts` (used by `/api/batch-submit` with `STELLAR_SECRET_KEY`) builds payment operations by calling `parseAsset` from `lib/stellar/utils.ts`. This shared parser handles `"XLM"`, `"native"`, and `"CODE:ISSUER"` strings. Do **not** introduce a local `parseAsset` in `server.ts`; doing so will break issued-asset batches (USDC, etc.) on the server-submit path.
 
-> **Local server-signing tests:** To test the `/api/batch-submit` or `/api/batch-retry` server-signing path locally, set `ALLOW_SERVER_SIGNING=true` alongside `STELLAR_SECRET_KEY` **and** `SERVER_SIGNING_API_KEY` (send it back as `Authorization: Bearer <key>`). Without `ALLOW_SERVER_SIGNING=true` the routes return 403; without `SERVER_SIGNING_API_KEY` set, they now also return 403 (fail closed — see DEPLOYMENT.md #728), not a permissive pass-through. The test suite (`tests/batch-submit.test.ts`, `tests/batch-retry.test.ts`) sets these automatically. See DEPLOYMENT.md for full security guidance before enabling in any deployed environment.
+> **Local server-signing tests:** To test the `/api/batch-submit` or `/api/batch-retry` server-signing path locally, set `ALLOW_SERVER_SIGNING=true` alongside `STELLAR_SECRET_KEY`. Without this flag the routes return 403. The test suite (`tests/batch-submit.test.ts`) sets this flag automatically. See DEPLOYMENT.md for full security guidance before enabling in any deployed environment.
 
 ### Adding Rate Limiting
 

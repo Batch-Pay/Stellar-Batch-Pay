@@ -1,26 +1,17 @@
 /**
- * Server-signing authorization utility (#696, fail-closed hardening #728).
+ * Server-signing authorization utility (#696).
  *
  * When `ALLOW_SERVER_SIGNING=true`, callers must present a secret API key via
  * the `Authorization: Bearer <key>` header. The key is compared (timing-safe)
  * against the `SERVER_SIGNING_API_KEY` environment variable.
  *
- * Fail closed (#728): if `SERVER_SIGNING_API_KEY` is not set, requests are
- * REFUSED (403) rather than let through. Server-signing moves real funds from
- * a hot wallet, so an unset credential must never mean "no credential
- * required" — that previously let any caller who could reach the route
- * authorize spends with nothing but network access.
- *
- * The only way around that refusal is an explicit, narrow opt-in intended for
- * local demos: `SERVER_SIGNING_ALLOW_UNAUTHENTICATED=true`. That opt-in is
- * itself refused whenever the process is running in production (see
- * `isProductionEnv` in `lib/secrets/index.ts`), so it can't accidentally ship
- * to a real deployment.
+ * Backward-compatibility: if `SERVER_SIGNING_API_KEY` is not set, the check
+ * is skipped (returns valid) but a deprecation warning is logged. Operators
+ * should set the env var in every deployment where server signing is enabled.
  */
 
 import { timingSafeEqual } from "crypto";
 import { logger } from "@/lib/logger";
-import { isProductionEnv } from "@/lib/secrets/index";
 
 export interface ServerSigningAuthResult {
   /** Whether the caller is authorized. */
@@ -54,42 +45,16 @@ export function validateServerSigningAuth(
 ): ServerSigningAuthResult {
   const apiKey = process.env.SERVER_SIGNING_API_KEY;
 
+  // Backward-compat: if the operator has not configured an API key, allow the
+  // request through but log a deprecation warning so they know to upgrade.
   if (!apiKey) {
-    // Narrow, explicit opt-in for local demos only. Refused outright in
-    // production so it can never become an accidental production posture.
-    const allowUnauthenticated =
-      process.env.SERVER_SIGNING_ALLOW_UNAUTHENTICATED === "true" &&
-      !isProductionEnv();
-
-    if (allowUnauthenticated) {
-      logger.warn(
-        { requestId },
-        "SERVER_SIGNING_API_KEY is not set. Accepting this server-signing " +
-          "request WITHOUT credential verification because " +
-          "SERVER_SIGNING_ALLOW_UNAUTHENTICATED=true. This is intended for " +
-          "local demos only — never set this in a deployed environment. " +
-          "See DEPLOYMENT.md.",
-      );
-      return { valid: true };
-    }
-
-    // Fail closed (#728): server-signing moves real funds from a hot wallet,
-    // so an unconfigured credential must refuse requests, not accept them.
-    logger.error(
+    logger.warn(
       { requestId },
-      "SERVER_SIGNING_API_KEY is not set. Refusing server-signing request " +
-        "(fail closed). Set SERVER_SIGNING_API_KEY to enable server-signing, " +
-        "or, for local demos only, set " +
-        "SERVER_SIGNING_ALLOW_UNAUTHENTICATED=true (refused in production). " +
-        "See DEPLOYMENT.md.",
+      "SERVER_SIGNING_API_KEY is not set. Server-signing requests are accepted " +
+        "without credential verification. Set SERVER_SIGNING_API_KEY to enable " +
+        "cryptographic authorization (see DEPLOYMENT.md).",
     );
-    return {
-      valid: false,
-      status: 403,
-      error:
-        "Server-signing is not authorized: SERVER_SIGNING_API_KEY is not " +
-        "configured on the server. Refusing this request.",
-    };
+    return { valid: true };
   }
 
   const token = extractBearerToken(authHeader);

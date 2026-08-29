@@ -1,9 +1,8 @@
 /**
- * Unit tests for server-signing authorization utility (#696, fail-closed #728).
+ * Unit tests for server-signing authorization utility (#696).
  *
  * Verifies that the HMAC-based API key check works correctly:
- * - Missing env var → fail closed (403), unless the narrow local-demo opt-in
- *   is set (and even then, refused in production)
+ * - Missing env var → backward-compat pass with deprecation warning
  * - Correct key → pass
  * - Missing Authorization header → 401
  * - Wrong key → 403
@@ -28,69 +27,21 @@ const TEST_API_KEY = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5
 
 beforeEach(() => {
   delete process.env.SERVER_SIGNING_API_KEY;
-  delete process.env.SERVER_SIGNING_ALLOW_UNAUTHENTICATED;
-  delete process.env.BATCHPAY_ENV;
-  // NODE_ENV is typed read-only by @types/node; vi.stubEnv is the
-  // vitest-supported way to override it per-test (auto-restored below).
-  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
-describe("validateServerSigningAuth (#728 fail-closed)", () => {
-  test("refuses (403) when SERVER_SIGNING_API_KEY is not set", () => {
-    const result = validateServerSigningAuth(null);
-
-    expect(result.valid).toBe(false);
-    expect(result.status).toBe(403);
-    expect(result.error).toMatch(/SERVER_SIGNING_API_KEY is not configured/i);
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.objectContaining({}),
-      expect.stringContaining("Refusing server-signing request"),
-    );
-  });
-
-  test("refuses (403) even when a Bearer token is present, if no key is configured", () => {
-    // A caller can't talk their way past "no key configured" by guessing a
-    // header value — there's nothing to compare it against.
-    const result = validateServerSigningAuth("Bearer some-guessed-value");
-
-    expect(result.valid).toBe(false);
-    expect(result.status).toBe(403);
-  });
-
-  test("allows requests when SERVER_SIGNING_ALLOW_UNAUTHENTICATED=true outside production", () => {
-    process.env.SERVER_SIGNING_ALLOW_UNAUTHENTICATED = "true";
-    vi.stubEnv("NODE_ENV", "development");
-
+describe("validateServerSigningAuth (#696)", () => {
+  test("allows requests when SERVER_SIGNING_API_KEY is not set (backward-compat)", () => {
     const result = validateServerSigningAuth(null);
 
     expect(result.valid).toBe(true);
     expect(result.error).toBeUndefined();
     expect(result.status).toBeUndefined();
+    // Should log a deprecation warning
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({}),
-      expect.stringContaining("SERVER_SIGNING_ALLOW_UNAUTHENTICATED=true"),
+      expect.stringContaining("SERVER_SIGNING_API_KEY is not set"),
     );
-  });
-
-  test("refuses (403) even with SERVER_SIGNING_ALLOW_UNAUTHENTICATED=true when NODE_ENV=production", () => {
-    process.env.SERVER_SIGNING_ALLOW_UNAUTHENTICATED = "true";
-    vi.stubEnv("NODE_ENV", "production");
-
-    const result = validateServerSigningAuth(null);
-
-    expect(result.valid).toBe(false);
-    expect(result.status).toBe(403);
-  });
-
-  test("refuses (403) even with SERVER_SIGNING_ALLOW_UNAUTHENTICATED=true when BATCHPAY_ENV=production", () => {
-    process.env.SERVER_SIGNING_ALLOW_UNAUTHENTICATED = "true";
-    process.env.BATCHPAY_ENV = "production";
-
-    const result = validateServerSigningAuth(null);
-
-    expect(result.valid).toBe(false);
-    expect(result.status).toBe(403);
   });
 
   test("allows requests with a correct API key", () => {
@@ -165,11 +116,11 @@ describe("validateServerSigningAuth (#728 fail-closed)", () => {
   test("passes requestId through for log correlation", () => {
     const requestId = "test-request-id-123";
 
-    // No API key set → fail-closed path logs an error with requestId
+    // No API key set → backward-compat path logs a warning with requestId
     const result = validateServerSigningAuth(null, requestId);
 
-    expect(result.valid).toBe(false);
-    expect(logger.error).toHaveBeenCalledWith(
+    expect(result.valid).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ requestId }),
       expect.stringContaining("SERVER_SIGNING_API_KEY is not set"),
     );

@@ -13,7 +13,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /** Save and restore the env vars touched by tests. */
 const WATCHED_VARS = [
-  'NODE_ENV',
   'BATCHPAY_ENV',
   'SECRET_BACKEND',
   'ALLOW_ENV_SECRETS_IN_PROD',
@@ -29,11 +28,15 @@ beforeEach(() => {
     saved[key] = process.env[key];
     delete process.env[key];
   }
+  // NODE_ENV is typed read-only by @types/node; vi.stubEnv is the
+  // vitest-supported way to override it per-test.
+  vi.unstubAllEnvs();
   // Reset module registry so each test gets a freshly-evaluated module.
   vi.resetModules();
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const key of WATCHED_VARS) {
     if (saved[key] === undefined) {
       delete process.env[key];
@@ -51,7 +54,7 @@ async function importSecrets() {
 
 describe('isProductionEnv()', () => {
   it('returns true when NODE_ENV=production', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     const { isProductionEnv } = await importSecrets();
     expect(isProductionEnv()).toBe(true);
   });
@@ -63,7 +66,7 @@ describe('isProductionEnv()', () => {
   });
 
   it('returns false when neither NODE_ENV nor BATCHPAY_ENV is production', async () => {
-    process.env.NODE_ENV = 'development';
+    vi.stubEnv('NODE_ENV', 'development');
     const { isProductionEnv } = await importSecrets();
     expect(isProductionEnv()).toBe(false);
   });
@@ -78,7 +81,7 @@ describe('isProductionEnv()', () => {
 
 describe('assertEnvBackendAllowed()', () => {
   it('throws in production without the override', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     const { assertEnvBackendAllowed } = await importSecrets();
 
     expect(() => assertEnvBackendAllowed()).toThrow(
@@ -96,14 +99,14 @@ describe('assertEnvBackendAllowed()', () => {
   });
 
   it('throws with a message that mentions the override flag', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     const { assertEnvBackendAllowed } = await importSecrets();
 
     expect(() => assertEnvBackendAllowed()).toThrow('ALLOW_ENV_SECRETS_IN_PROD=true');
   });
 
   it('does NOT throw in production when ALLOW_ENV_SECRETS_IN_PROD=true', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     process.env.ALLOW_ENV_SECRETS_IN_PROD = 'true';
     const { assertEnvBackendAllowed } = await importSecrets();
 
@@ -111,7 +114,7 @@ describe('assertEnvBackendAllowed()', () => {
   });
 
   it('logs a warning when the emergency override is active', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     process.env.ALLOW_ENV_SECRETS_IN_PROD = 'true';
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { assertEnvBackendAllowed } = await importSecrets();
@@ -125,14 +128,14 @@ describe('assertEnvBackendAllowed()', () => {
   });
 
   it('does NOT throw outside of production', async () => {
-    process.env.NODE_ENV = 'development';
+    vi.stubEnv('NODE_ENV', 'development');
     const { assertEnvBackendAllowed } = await importSecrets();
 
     expect(() => assertEnvBackendAllowed()).not.toThrow();
   });
 
   it('does NOT throw when env vars are unset (local dev fallback)', async () => {
-    // NODE_ENV and BATCHPAY_ENV are both deleted in beforeEach
+    // BATCHPAY_ENV is deleted in beforeEach; NODE_ENV is restored by vi.unstubAllEnvs
     const { assertEnvBackendAllowed } = await importSecrets();
 
     expect(() => assertEnvBackendAllowed()).not.toThrow();
@@ -143,7 +146,7 @@ describe('assertEnvBackendAllowed()', () => {
 
 describe('createSecretsProvider() — env backend', () => {
   it('throws in production when SECRET_BACKEND=env', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     process.env.SECRET_BACKEND = 'env';
     const { createSecretsProvider } = await importSecrets();
 
@@ -153,7 +156,7 @@ describe('createSecretsProvider() — env backend', () => {
   });
 
   it('throws in production when SECRET_BACKEND is unset (defaults to env)', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     // SECRET_BACKEND is deleted in beforeEach
     const { createSecretsProvider } = await importSecrets();
 
@@ -163,7 +166,7 @@ describe('createSecretsProvider() — env backend', () => {
   });
 
   it('resolves successfully in production when ALLOW_ENV_SECRETS_IN_PROD=true', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     process.env.SECRET_BACKEND = 'env';
     process.env.ALLOW_ENV_SECRETS_IN_PROD = 'true';
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -175,7 +178,7 @@ describe('createSecretsProvider() — env backend', () => {
   });
 
   it('resolves successfully in development without any override', async () => {
-    process.env.NODE_ENV = 'development';
+    vi.stubEnv('NODE_ENV', 'development');
     process.env.SECRET_BACKEND = 'env';
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { createSecretsProvider } = await importSecrets();
@@ -185,7 +188,7 @@ describe('createSecretsProvider() — env backend', () => {
   });
 
   it('still logs the local-dev warning in non-production', async () => {
-    process.env.NODE_ENV = 'development';
+    vi.stubEnv('NODE_ENV', 'development');
     process.env.SECRET_BACKEND = 'env';
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { createSecretsProvider } = await importSecrets();
@@ -201,7 +204,7 @@ describe('createSecretsProvider() — env backend', () => {
 
 describe('createSecretsProvider() — aws backend', () => {
   it('does not apply the env-backend guard when SECRET_BACKEND=aws', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     process.env.SECRET_BACKEND = 'aws';
     process.env.AWS_REGION = 'us-east-1';
 
@@ -225,7 +228,7 @@ describe('createSecretsProvider() — aws backend', () => {
 
 describe('createSecretsProvider() — github backend', () => {
   it('does not apply the env-backend guard when SECRET_BACKEND=github', async () => {
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     process.env.SECRET_BACKEND = 'github';
     const { createSecretsProvider } = await importSecrets();
 

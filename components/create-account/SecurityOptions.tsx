@@ -102,7 +102,7 @@ export default function SecurityOptions({
           checked={marketingEmails}
           onChange={onMarketingEmailsChange}
         >
-          I'd like to receive product updates and marketing emails (Optional)
+          I&apos;d like to receive product updates and marketing emails (Optional)
         </CheckboxItem>
       </div>
     </div>

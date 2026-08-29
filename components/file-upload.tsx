@@ -164,7 +164,7 @@ export function FileUpload({ onFileSelect, onValidationResult, disabled }: FileU
             <ul className="list-disc list-inside text-xs ml-2">
               <li>address: Stellar public key (starts with G)</li>
               <li>amount: Positive number</li>
-              <li>asset: 'XLM' or 'CODE:ISSUER'</li>
+              <li>asset: &apos;XLM&apos; or &apos;CODE:ISSUER&apos;</li>
             </ul>
           </div>
         </details>

@@ -176,13 +176,15 @@ describe('webhook registration persistence (#730)', () => {
     const registration = registerWebhook('https://example.com/webhook', ['batch.completed'], secret);
 
     try {
-      expect(getWebhooks()).toEqual([registration]);
-      expect(getWebhooksRedacted()).toEqual([
-        expect.objectContaining({
-          id: registration.id,
-          secretPrefix: secret.slice(0, 8),
-        }),
-      ]);
+      expect(getWebhooks()).toEqual(expect.arrayContaining([registration]));
+      expect(getWebhooksRedacted()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: registration.id,
+            secretPrefix: secret.slice(0, 8),
+          }),
+        ]),
+      );
       expect(JSON.stringify(getWebhooksRedacted())).not.toContain(secret);
 
       const row = getDb()

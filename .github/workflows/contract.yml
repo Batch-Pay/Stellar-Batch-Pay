@@ -45,7 +45,7 @@ jobs:
       - name: Install Stellar CLI
         run: |
           if ! stellar --version 2>/dev/null | grep -q '22.8.2'; then
-            cargo install --locked stellar-cli --version 22.8.2 --features opt
+            cargo install --locked stellar-cli --version 22.8.2
           else
             echo "Stellar CLI 22.8.2 already cached."
           fi

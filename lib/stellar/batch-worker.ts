@@ -292,6 +292,9 @@ export async function processJobInBackground(
       await updateJob(jobId, {
         status: finalStatus,
         result: finalResult,
+        ...(finalStatus === "failed"
+          ? { error: allResults.find((r) => r.error)?.error }
+          : {}),
       });
 
       logger.info({ requestId, jobId, status: finalStatus, summary: finalResult.summary }, "Background job processing finished (pre-signed mode)");

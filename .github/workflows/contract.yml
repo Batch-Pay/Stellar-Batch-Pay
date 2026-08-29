@@ -37,17 +37,17 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin/stellar
             contracts/target
-          key: ${{ runner.os }}-cargo-contracts-stellar-21.7.0-${{ hashFiles('contracts/Cargo.lock', 'contracts/Cargo.toml', 'contracts/batch-vesting/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-contracts-stellar-22.8.2-${{ hashFiles('contracts/Cargo.lock', 'contracts/Cargo.toml', 'contracts/batch-vesting/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-contracts-stellar-21.7.0-
+            ${{ runner.os }}-cargo-contracts-stellar-22.8.2-
             ${{ runner.os }}-cargo-contracts-
 
       - name: Install Stellar CLI
         run: |
-          if ! stellar --version 2>/dev/null | grep -q '21.7.0'; then
-            cargo install --locked stellar-cli --version 21.7.0 --features opt
+          if ! stellar --version 2>/dev/null | grep -q '22.8.2'; then
+            cargo install --locked stellar-cli --version 22.8.2 --features opt
           else
-            echo "Stellar CLI 21.7.0 already cached."
+            echo "Stellar CLI 22.8.2 already cached."
           fi
 
       - name: Run batch-vesting tests

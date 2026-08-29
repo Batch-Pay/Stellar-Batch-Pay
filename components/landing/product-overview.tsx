@@ -49,7 +49,7 @@ export const ProductOverview = () => {
                             <div className="space-y-2">
                                 <h3 className="text-lg font-semibold text-white">Manual Crypto Payouts Are Inefficient</h3>
                                 <p className="text-[#9CA3AF] text-base leading-relaxed max-w-md">
-                                    Processing individual transactions manually is time-consuming, error-prone, and doesn't scale for teams making regular payments to multiple recipients.
+                                    Processing individual transactions manually is time-consuming, error-prone, and doesn&apos;t scale for teams making regular payments to multiple recipients.
                                 </p>
                             </div>
                         </MotionSafe>

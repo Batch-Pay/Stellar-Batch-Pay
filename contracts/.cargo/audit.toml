@@ -1,0 +1,16 @@
+# cargo-audit config for the contracts workspace.
+# See https://docs.rs/crate/cargo-audit/latest/source/audit.toml.example
+#
+# Ignored IDs are informational "unmaintained" warnings from transitive
+# soroban-sdk 22.x crates. They are not CVEs and cannot be bumped without
+# an SDK major upgrade.
+
+[advisories]
+ignore = [
+    # derivative 2.2.0 is unmaintained (RUSTSEC-2024-0388). Pulled in by
+    # ark-ff / ark-ec via soroban-sdk. No patched 2.x release exists.
+    "RUSTSEC-2024-0388",
+    # paste 1.0.15 is unmaintained (RUSTSEC-2024-0436). Proc-macro only,
+    # pulled in by soroban-sdk. No security issue, no maintained fork in tree.
+    "RUSTSEC-2024-0436",
+]

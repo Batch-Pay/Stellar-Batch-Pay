@@ -61,7 +61,7 @@ export function CostExampleSection() {
       {/* Section Header */}
       <div className="text-center mb-10">
         <h2 className="text-4xl font-bold text-white mb-3">Cost Example</h2>
-        <p className="text-slate-400 text-base">See exactly what you'll pay</p>
+        <p className="text-slate-400 text-base">See exactly what you&apos;ll pay</p>
       </div>
 
       {/* Card */}

@@ -101,6 +101,15 @@ async function ensureSchema(): Promise<void> {
 
         CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhookId ON webhook_deliveries (webhookId);
         CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_jobId ON webhook_deliveries (jobId);
+
+        CREATE TABLE IF NOT EXISTS webhooks (
+          id               TEXT PRIMARY KEY,
+          url              TEXT NOT NULL,
+          events           TEXT NOT NULL,
+          createdAt        TEXT NOT NULL,
+          secretHash       TEXT NOT NULL,
+          secretCiphertext TEXT NOT NULL
+        );
       `);
     })();
   }

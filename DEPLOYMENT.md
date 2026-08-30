@@ -34,7 +34,7 @@ export LOG_LEVEL="info"
 export NODE_ENV="production"
 ```
 
-### `ALLOW_SERVER_SIGNING` GÇö Server-Side Transaction Signing (#596)
+### `ALLOW_SERVER_SIGNING` Gï¿½ï¿½ Server-Side Transaction Signing (#596)
 
 | Variable               | Default         | Purpose                                                                             |
 | ---------------------- | --------------- | ----------------------------------------------------------------------------------- |
@@ -48,7 +48,7 @@ export NODE_ENV="production"
 - Automated test pipelines (e.g. `tests/batch-submit.test.ts` sets this to `"true"`)
 - Staging environments running automated batch jobs
 
-### `SERVER_SIGNING_API_KEY` GÇö Cryptographic Authorization (#696, fail-closed #728)
+### `SERVER_SIGNING_API_KEY` â€” Cryptographic Authorization (#696, fail-closed #728)
 
 | Variable                  | Default         | Purpose                                                                                 |
 | ------------------------- | --------------- | --------------------------------------------------------------------------------------- |
@@ -71,13 +71,13 @@ openssl rand -hex 32
 
 **Fail closed (#728):** `SERVER_SIGNING_API_KEY` is **required** whenever
 `ALLOW_SERVER_SIGNING=true`. If it is not set, `/api/batch-submit` and
-`/api/batch-retry` refuse every server-signing request with `403` GÇö they do
+`/api/batch-retry` refuse every server-signing request with `403` â€” they do
 not fall back to accepting requests without a credential. Server-signing
 moves real funds from a hot wallet, so an unconfigured credential must mean
 "nobody is authorized," never "everybody is authorized." Set
 `SERVER_SIGNING_API_KEY` in every deployment where `ALLOW_SERVER_SIGNING=true`.
 
-**`SERVER_SIGNING_ALLOW_UNAUTHENTICATED` GÇö local-demo-only opt-out:**
+**`SERVER_SIGNING_ALLOW_UNAUTHENTICATED` â€” local-demo-only opt-out:**
 
 | Variable                              | Default | Purpose                                                                 |
 | -------------------------------------- | ------- | ------------------------------------------------------------------------ |
@@ -86,14 +86,14 @@ moves real funds from a hot wallet, so an unconfigured credential must mean
 If you need to exercise server-signing locally without generating a key,
 set `SERVER_SIGNING_ALLOW_UNAUTHENTICATED=true`. This is **refused outright
 whenever the process is running in production** (`NODE_ENV=production` or
-`BATCHPAY_ENV=production`) GÇö the request still fails closed with `403` in
+`BATCHPAY_ENV=production`) â€” the request still fails closed with `403` in
 that case, so this opt-in can never accidentally become a production
 posture. Never set this variable in a deployed environment.
 
 **Security warnings:**
 
 - `ALLOW_SERVER_SIGNING=true` centralises key risk on the server. A compromised server can sign and submit arbitrary transactions.
-- `SERVER_SIGNING_API_KEY` is required, not optional, whenever `ALLOW_SERVER_SIGNING=true` GÇö the server refuses to run server-signing requests without it (see fail-closed note above).
+- `SERVER_SIGNING_API_KEY` is required, not optional, whenever `ALLOW_SERVER_SIGNING=true` â€” the server refuses to run server-signing requests without it (see fail-closed note above).
 - Never enable on public-facing production endpoints without additional access controls (VPN, IP allowlist, or mutual TLS).
 - Requires `STELLAR_SECRET_KEY` to be set; the flag has no effect without it.
 - Audit all access logs when this flag is active.
@@ -104,7 +104,7 @@ export ALLOW_SERVER_SIGNING=true
 export STELLAR_SECRET_KEY="S..."
 export SERVER_SIGNING_API_KEY="$(openssl rand -hex 32)"
 
-# Production (public) GÇö leave unset; users sign via Freighter wallet
+# Production (public) Gï¿½ï¿½ leave unset; users sign via Freighter wallet
 # ALLOW_SERVER_SIGNING is intentionally absent
 ```
 
@@ -143,7 +143,7 @@ export SERVER_SIGNING_API_KEY="$(openssl rand -hex 32)"
 > See DEVELOPMENT.md for local test setup using this flag.
 
 
-### `WALLET_AUTH_SECRET` GÇö Wallet Session Authentication
+### `WALLET_AUTH_SECRET` â€” Wallet Session Authentication
 
 Batch read/recover routes (`/api/batch-status`, `/api/batch-history`,
 `/api/batch-recover`, `/api/batch-events`) require a short-lived wallet session
@@ -194,7 +194,7 @@ backend configured by `SECRET_BACKEND`.
 
 ```bash
 export SECRET_BACKEND=env
-export KEEPER_SECRET="S..."   # .env or shell GÇö never commit
+export KEEPER_SECRET="S..."   # .env or shell Gï¿½ï¿½ never commit
 npx ts-node scripts/keeper.ts
 ```
 
@@ -221,7 +221,7 @@ environments.
 ### Backend: `github` (GitHub Actions CI/CD)
 
 1. Add `KEEPER_SECRET` in your repository:
-   **Settings GåÆ Secrets and variables GåÆ Actions GåÆ New repository secret**
+   **Settings Gï¿½ï¿½ Secrets and variables Gï¿½ï¿½ Actions Gï¿½ï¿½ New repository secret**
 2. Reference in your workflow:
    ```yaml
    jobs:
@@ -255,7 +255,7 @@ requires `ceil(S / L)` consecutive keeper runs. After the final window is proces
 the cursor resets to 0 and the next run begins a fresh sweep.
 
 ```
-Example: 50 schedule entries, MAINTENANCE_LIMIT=10 GåÆ 5 runs for full coverage.
+Example: 50 schedule entries, MAINTENANCE_LIMIT=10 Gï¿½ï¿½ 5 runs for full coverage.
 ```
 
 **Tuning recommendations:**
@@ -281,7 +281,7 @@ workflows correctly report success or failure.
 
 | Exit Code | Meaning |
 | --------- | ------- |
-| `0` | Keeper completed successfully GÇö all recipients maintained, instance bumped, balance checked. |
+| `0` | Keeper completed successfully Gï¿½ï¿½ all recipients maintained, instance bumped, balance checked. |
 | `1` | Keeper encountered a fatal error (missing config, RPC failure, transaction error, etc.). The alert webhook fires **before** the non-zero exit. |
 
 **CI behaviour:**
@@ -300,7 +300,7 @@ npx ts-node scripts/keeper.ts; echo "exit: $?"
 
 # Failure path (missing CONTRACT_ID)
 CONTRACT_ID= npx ts-node scripts/keeper.ts; echo "exit: $?"
-# GåÆ prints exit: 1
+# Gï¿½ï¿½ prints exit: 1
 ```
 
 The `main` function is exported for programmatic testing via subprocess
@@ -327,7 +327,7 @@ The batch-vesting contract enforces a **single whitelisted fee asset** stored in
 **Key points:**
 
 - The fee asset is set **once** during contract initialization via `set_config()`
-- `set_fee_config()` **no longer accepts** a `fee_asset` parameter GÇö it only sets `fee_per_recipient` and `treasury`
+- `set_fee_config()` **no longer accepts** a `fee_asset` parameter Gï¿½ï¿½ it only sets `fee_per_recipient` and `treasury`
 - All deposit fees are automatically collected in the whitelisted asset
 - Changing the fee asset requires a full `set_config()` call (admin-only)
 
@@ -366,7 +366,7 @@ stellar contract invoke \
     "fee_asset": "<XLM_SAC_ADDRESS>"
   }'
 
-# 4. Set fee parameters (fee_asset NOT included GÇö comes from config)
+# 4. Set fee parameters (fee_asset NOT included Gï¿½ï¿½ comes from config)
 stellar contract invoke \
   --id <CONTRACT_ID> \
   --source deployer \
@@ -500,13 +500,13 @@ misconfigured. Use it as a readiness probe.
 
 | Topology                          | Mode          | Safe? |
 | --------------------------------- | ------------- | ----- |
-| Single container / single process | `single-node` | G£à     |
-| Multiple replicas, shared volume  | `single-node` | GÜán+Å Only with a single writer |
-| Multiple replicas, no shared disk | `ha`          | G£à     |
-| Serverless (ephemeral `/tmp`)     | `ha`          | G£à     |
-| Serverless (ephemeral `/tmp`)     | `single-node` | G¥î Data lost on cold start    |
+| Single container / single process | `single-node` | Gï¿½ï¿½     |
+| Multiple replicas, shared volume  | `single-node` | Gï¿½ï¿½n+ï¿½ Only with a single writer |
+| Multiple replicas, no shared disk | `ha`          | Gï¿½ï¿½     |
+| Serverless (ephemeral `/tmp`)     | `ha`          | Gï¿½ï¿½     |
+| Serverless (ephemeral `/tmp`)     | `single-node` | Gï¿½ï¿½ Data lost on cold start    |
 
-**Health check** GÇö verify store connectivity before routing traffic:
+**Health check** Gï¿½ï¿½ verify store connectivity before routing traffic:
 
 ```bash
 curl -s http://localhost:3000/api/health

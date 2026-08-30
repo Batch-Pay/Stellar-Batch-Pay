@@ -27,7 +27,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown,wasm32v1-none
 
       - name: Cache Cargo artifacts
         uses: actions/cache@v4
@@ -37,18 +37,24 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin/stellar
             contracts/target
-          key: ${{ runner.os }}-cargo-contracts-stellar-21.7.0-${{ hashFiles('contracts/Cargo.lock', 'contracts/Cargo.toml', 'contracts/batch-vesting/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-contracts-stellar-22.8.2-${{ hashFiles('contracts/Cargo.lock', 'contracts/Cargo.toml', 'contracts/batch-vesting/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-contracts-stellar-21.7.0-
+            ${{ runner.os }}-cargo-contracts-stellar-22.8.2-
             ${{ runner.os }}-cargo-contracts-
 
       - name: Install Stellar CLI
         run: |
-          if ! stellar --version 2>/dev/null | grep -q '21.7.0'; then
-            cargo install --locked stellar-cli --version 21.7.0 --features opt
+          if stellar --version 2>/dev/null | grep -q '22.8.2'; then
+            echo "Stellar CLI 22.8.2 already cached."
           else
-            echo "Stellar CLI 21.7.0 already cached."
+            curl -fsSL -o /tmp/stellar-cli.tar.gz \
+              https://github.com/stellar/stellar-cli/releases/download/v22.8.2/stellar-cli-22.8.2-x86_64-unknown-linux-gnu.tar.gz
+            mkdir -p "$HOME/.cargo/bin"
+            tar -xzf /tmp/stellar-cli.tar.gz -C /tmp
+            bin=$(find /tmp -maxdepth 2 -type f -name stellar | head -n 1)
+            install -m 0755 "$bin" "$HOME/.cargo/bin/stellar"
           fi
+          stellar --version
 
       - name: Run batch-vesting tests
         working-directory: contracts

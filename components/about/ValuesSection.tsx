@@ -45,7 +45,7 @@ export function ValuesSection() {
           </h2>
 
           <p className="text-lg text-[#a1a1aa] leading-relaxed">
-            Financial operations demand the highest standards. We've engineered
+            Financial operations demand the highest standards. We&apos;ve engineered
             every aspect of our platform with security, accuracy, and user
             control in mind.
           </p>

@@ -14,7 +14,9 @@ describe("validateManualAddress", () => {
   });
 
   test("rejects malformed checksum", () => {
-    const bad = `${validAddress.slice(0, -1)}X`;
+    const flipAt = 12;
+    const flip = validAddress[flipAt] === "A" ? "B" : "A";
+    const bad = `${validAddress.slice(0, flipAt)}${flip}${validAddress.slice(flipAt + 1)}`;
     expect(validateManualAddress(bad)).toBe("Invalid Stellar address checksum");
   });
 

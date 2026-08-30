@@ -87,7 +87,7 @@
     "input-otp": "1.4.1",
     "ioredis": "^6.0.0",
     "lucide-react": "^0.454.0",
-    "next": "16.0.10",
+    "next": "16.3.3",
     "next-themes": "^0.4.6",
     "papaparse": "^5.5.3",
     "pg": "^8.16.3",
@@ -135,6 +135,11 @@
     "node": ">=22"
   },
   "overrides": {
-    "eslint": "^8.57.1"
+    "eslint": "^8.57.1",
+    "nanoid": "3.3.18",
+    "fast-uri": "3.1.5",
+    "glob": {
+      "brace-expansion": "5.0.9"
+    }
   }
 }

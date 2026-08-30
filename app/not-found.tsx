@@ -36,7 +36,7 @@ export default function NotFound() {
                 Page Not Found
               </h2>
               <p className="text-white text-lg md:text-xl max-w-[473px] font-medium leading-relaxed mb-10">
-                The page you're looking for may have been moved, deleted, or
+                The page you&apos;re looking for may have been moved, deleted, or
                 entered incorrectly.
               </p>
 

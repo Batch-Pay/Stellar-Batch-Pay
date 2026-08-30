@@ -25,7 +25,7 @@ export {
   type WebhookDelivery,
 } from "./job-store-types";
 
-function usePostgres(): boolean {
+function isPostgresBackend(): boolean {
   return getStoreConfig().jobStoreBackend === "postgres";
 }
 
@@ -34,7 +34,7 @@ async function pg() {
 }
 
 export function getDb() {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     throw new Error("getDb() is only available for the SQLite job store backend.");
   }
   return sqlite.getDb();
@@ -46,7 +46,7 @@ export async function createJob(
   publicKey: string,
   signedTransactions?: string[],
 ): Promise<string> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).createJob(payments, network, publicKey, signedTransactions);
   }
   return sqlite.createJob(payments, network, publicKey, signedTransactions);
@@ -61,28 +61,28 @@ export async function createIdempotentJob<ResponseBody>(args: {
   signedTransactions?: string[];
   buildResponseBody: (jobId: string) => ResponseBody;
 }): Promise<IdempotentJobResult<ResponseBody>> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).createIdempotentJob(args);
   }
   return sqlite.createIdempotentJob(args);
 }
 
 export async function getJob(jobId: string, publicKey?: string): Promise<JobState | undefined> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).getJob(jobId, publicKey);
   }
   return sqlite.getJob(jobId, publicKey);
 }
 
 export async function incrementCompletedBatches(jobId: string): Promise<void> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).incrementCompletedBatches(jobId);
   }
   return sqlite.incrementCompletedBatches(jobId);
 }
 
 export async function claimJobForProcessing(jobId: string): Promise<boolean> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).claimJobForProcessing(jobId);
   }
   return sqlite.claimJobForProcessing(jobId);
@@ -92,7 +92,7 @@ export async function updateJob(
   jobId: string,
   patch: Partial<Omit<JobState, "jobId" | "createdAt">>,
 ): Promise<void> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).updateJob(jobId, patch);
   }
   return sqlite.updateJob(jobId, patch);
@@ -104,28 +104,28 @@ export async function getAllJobs(
     offset?: number;
   },
 ): Promise<JobState[]> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).getAllJobs(opts);
   }
   return sqlite.getAllJobs(opts);
 }
 
 export async function countJobs(opts?: JobQueryFilters): Promise<number> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).countJobs(opts);
   }
   return sqlite.countJobs(opts);
 }
 
 export async function getBatchHistorySummary(opts?: JobQueryFilters): Promise<BatchHistorySummary> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).getBatchHistorySummary(opts);
   }
   return sqlite.getBatchHistorySummary(opts);
 }
 
 export async function logWebhookDelivery(entry: WebhookDeliveryLog): Promise<void> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).logWebhookDelivery(entry);
   }
   return sqlite.logWebhookDelivery(entry);
@@ -136,7 +136,7 @@ export async function getWebhookDeliveries(opts?: {
   webhookId?: string;
   limit?: number;
 }): Promise<WebhookDelivery[]> {
-  if (usePostgres()) {
+  if (isPostgresBackend()) {
     return (await pg()).getWebhookDeliveries(opts);
   }
   return sqlite.getWebhookDeliveries(opts);

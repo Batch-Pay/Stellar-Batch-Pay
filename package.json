@@ -28,10 +28,10 @@
     "test": "tests"
   },
   "scripts": {
-    "build": "next build",
-    "dev": "next dev",
+    "build": "node init && next build",
+    "dev": "node init && next dev",
     "lint": "eslint .",
-    "start": "next start",
+    "start": "node init && next start",
     "cli": "npx tsx cli/index.ts",
     "cli:help": "npx tsx cli/index.ts help",
     "test": "vitest run tests/",

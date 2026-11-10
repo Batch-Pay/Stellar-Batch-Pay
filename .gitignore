@@ -19,9 +19,6 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files
-.env
-.env.local
-.env.production
 .env*.local
 
 # keep template in repo
@@ -57,3 +54,4 @@ contracts/batch-vesting/cargo_test_err.txt
 contracts/batch-vesting/test_output.txt
 contracts/batch-vesting/test_output_utf8.txt
 
+config.bat
